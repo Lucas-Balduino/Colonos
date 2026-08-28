@@ -1,0 +1,69 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Pixelify Sans", "Press Start 2P", ui-sans-serif, system-ui, sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+}
+
+:root {
+  --background: #1a1520;
+  --foreground: #f4e8c8;
+  --card: #2a2133;
+  --card-foreground: #f4e8c8;
+  --popover: #231c2c;
+  --popover-foreground: #f4e8c8;
+  --primary: #d4a017;
+  --primary-foreground: #1a1520;
+  --secondary: #3d2f4a;
+  --secondary-foreground: #f4e8c8;
+  --muted: #3a3044;
+  --muted-foreground: #c4b49a;
+  --accent: #4a7c59;
+  --accent-foreground: #f4e8c8;
+  --destructive: #c44536;
+  --border: #5c4a32;
+  --input: #5c4a32;
+  --ring: #d4a017;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  image-rendering: pixelated;
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+* {
+  border-color: var(--border);
+}
