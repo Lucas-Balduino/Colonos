@@ -71,6 +71,24 @@ export function chooseBotAction(state: GameState, playerId: PlayerId): Action | 
   if (legal.length === 0) return null;
   const player = state.players.find((p) => p.id === playerId);
   if (!player) return legal[0]!;
+  const onTurn = whoseTurn(state) === playerId;
+  if (!onTurn) {
+    const offers = legal.filter((a) => a.type === "ACCEPT_TRADE");
+    for (const o of offers) {
+      if (o.type !== "ACCEPT_TRADE") continue;
+      const offer = state.tradeOffers.find((t) => t.id === o.offerId);
+      if (!offer) continue;
+      const after = { ...player.resources };
+      for (const r of RESOURCES) {
+        after[r] += offer.give[r];
+        after[r] -= offer.want[r];
+      }
+      const fake = { ...player, resources: after };
+      if (missingFor(fake, "city") < missingFor(player, "city")) return o;
+      if (missingFor(fake, "settlement") < missingFor(player, "settlement")) return o;
+    }
+    return legal.find((a) => a.type === "REJECT_TRADE") ?? null;
+  }
 
   if (state.phase.type === "setupSettlement") {
     const opts = legal.filter((a) => a.type === "PLACE_SETTLEMENT");
@@ -195,4 +213,17 @@ export function botDelayMs(): number {
 export function whoseTurn(state: GameState): PlayerId {
   if (state.phase.type === "discard") return state.phase.queue[0]!;
   return currentPlayer(state).id;
+}
+
+export function nextBotAction(state: GameState): Action | null {
+  if (state.phase.type === "gameOver") return null;
+  const actor = whoseTurn(state);
+  const actorP = state.players.find((p) => p.id === actor);
+  if (actorP?.isBot) return chooseBotAction(state, actor);
+  for (const other of state.players) {
+    if (!other.isBot || other.id === actor) continue;
+    const act = chooseBotAction(state, other.id);
+    if (act) return act;
+  }
+  return null;
 }

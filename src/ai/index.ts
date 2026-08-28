@@ -1,1 +1,1 @@
-export { chooseBotAction, botDelayMs, whoseTurn } from "./bot.ts";
+export { chooseBotAction, botDelayMs, whoseTurn, nextBotAction } from "./bot.ts";

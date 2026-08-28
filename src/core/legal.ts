@@ -1,6 +1,6 @@
 import { RESOURCES } from "./types.ts";
-import type { Action, GameState, Player, PlayerId, Resource, ResourceMap } from "./types.ts";
-import { COSTS, countResources, emptyResources, hasAtLeast } from "./resources.ts";
+import type { Action, GameState, Player, PlayerId, ResourceMap } from "./types.ts";
+import { COSTS, emptyResources, hasAtLeast } from "./resources.ts";
 import {
   bestBankRatio,
   canAfford,

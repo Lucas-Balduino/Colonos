@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: colonos
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production

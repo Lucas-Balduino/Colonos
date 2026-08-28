@@ -1,0 +1,9 @@
+services:
+  colonos:
+    build: .
+    ports:
+      - "43123:43123"
+    environment:
+      NODE_ENV: production
+      PORT: 43123
+    restart: unless-stopped

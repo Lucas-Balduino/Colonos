@@ -1,6 +1,7 @@
-import { HEX_DIRS, addAxial, cubeDistance, hexId, landHexes, spiralOuterFirst } from "./hex.ts";
+import { HEX_DIRS, addAxial, cubeDistance, hexId, spiralOuterFirst } from "./hex.ts";
 import { shuffle } from "./rng.ts";
 import type {
+  Axial,
   Board,
   Edge,
   EdgeId,
