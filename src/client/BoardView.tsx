@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Application, extend, useTick } from "@pixi/react";
-import { Assets, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
+import { Assets, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
 import type { Graphics as PixiGraphics } from "pixi.js";
 import { toast } from "sonner";
 import { cubeDistance, hexCorner, hexId, parseHexId, pointyHexToPixel } from "../core/hex.ts";
@@ -10,6 +10,9 @@ import { sfx } from "./audio.ts";
 import { PALETTE } from "./theme.ts";
 
 extend({ Container, Graphics, Sprite, Text });
+
+const VERTEX_HIT = new Rectangle(-14, -16, 28, 32);
+const EDGE_HIT = new Rectangle(-18, -8, 36, 16);
 
 function vertexPos(board: Board, vid: string): { x: number; y: number } {
   for (const h of Object.values(board.hexes)) {
@@ -218,7 +221,7 @@ export function BoardView({
       const nextPops: Record<string, number> = {};
       for (const part of key.split("|")) {
         if (!prev.has(part) && (part.includes("settlement") || part.includes("city"))) {
-          nextPops[part.split(":")[0]!] = Date.now();
+          nextPops[part.split(":")[0]!] = performance.now();
         }
       }
       if (Object.keys(nextPops).length) setPops((p) => ({ ...p, ...nextPops }));
@@ -299,7 +302,7 @@ export function BoardView({
               const p = pointyHexToPixel(h, HEX_SIZE);
               const tex = textures?.["/sprites/hex-sea.png"];
               return tex ? (
-                <pixiSprite key={`sea-${h.q},${h.r}`} texture={tex} x={p.x} y={p.y} anchor={0.5} />
+                <pixiSprite key={`sea-${h.q},${h.r}`} texture={tex} x={p.x} y={p.y} anchor={0.5} eventMode="none" />
               ) : null;
             })}
             {Object.values(view.board.hexes).map((hex) => {
@@ -313,13 +316,13 @@ export function BoardView({
                   key={hex.id}
                   x={p.x}
                   y={p.y}
-                  eventMode="static"
+                  eventMode={canRob ? "static" : "none"}
                   cursor={canRob ? "pointer" : "default"}
                   onPointerTap={() => clickHex(hex.id)}
-                  onPointerOver={() => setHover({ kind: "hex", id: hex.id })}
+                  onPointerOver={() => canRob && setHover({ kind: "hex", id: hex.id })}
                   onPointerOut={() => setHover((h) => (h?.id === hex.id ? null : h))}
                 >
-                  {tex ? <pixiSprite texture={tex} anchor={0.5} /> : <FallbackHex terrain={hex.terrain} />}
+                  {tex ? <pixiSprite texture={tex} anchor={0.5} eventMode="none" /> : <FallbackHex terrain={hex.terrain} />}
                   {hex.number !== null ? <NumberToken value={hex.number} /> : null}
                   {lit ? <FlashRing /> : null}
                   {canRob ? <PulseRing /> : null}
@@ -332,7 +335,14 @@ export function BoardView({
               const url = port.ratio === 3 ? "/sprites/port-any.png" : "/sprites/port-2.png";
               const tex = textures?.[url];
               return tex ? (
-                <pixiSprite key={port.edgeId} texture={tex} x={(a.x + b.x) / 2} y={(a.y + b.y) / 2} anchor={0.5} />
+                <pixiSprite
+                  key={port.edgeId}
+                  texture={tex}
+                  x={(a.x + b.x) / 2}
+                  y={(a.y + b.y) / 2}
+                  anchor={0.5}
+                  eventMode="none"
+                />
               ) : null;
             })}
             {Object.values(view.board.edges).map((edge) => {
@@ -340,7 +350,8 @@ export function BoardView({
               const b = vertexPos(view.board, edge.vertices[1]);
               const owner = view.players.find((p) => p.id === edge.road);
               const hot = roadTargets.has(edge.id);
-              const ghost = hover?.kind === "edge" && hover.id === edge.id && hot;
+              const hovered = hover?.kind === "edge" && hover.id === edge.id;
+              const ghost = hot && !edge.road;
               const show = Boolean(edge.road) || ghost;
               const color = owner?.color ?? youColor;
               const tex = textures?.[roadSprite(color)];
@@ -353,12 +364,20 @@ export function BoardView({
                   rotation={ang}
                   eventMode="static"
                   cursor={hot ? "pointer" : "default"}
+                  hitArea={EDGE_HIT}
                   onPointerTap={() => clickEdge(edge.id)}
                   onPointerOver={() => setHover({ kind: "edge", id: edge.id })}
                   onPointerOut={() => setHover((h) => (h?.id === edge.id ? null : h))}
                 >
-                  {hot && !show ? <PulseRoad /> : null}
-                  {show && tex ? <pixiSprite texture={tex} anchor={0.5} alpha={edge.road ? 1 : 0.5} /> : null}
+                  {ghost ? <PulseRoad /> : null}
+                  {show && tex ? (
+                    <pixiSprite
+                      texture={tex}
+                      anchor={0.5}
+                      alpha={edge.road ? 1 : hovered ? 0.9 : 0.45}
+                      eventMode="none"
+                    />
+                  ) : null}
                 </pixiContainer>
               );
             })}
@@ -366,28 +385,38 @@ export function BoardView({
               const p = vertexPos(view.board, v.id);
               const owner = v.building ? view.players.find((pl) => pl.id === v.building?.owner) : null;
               const hot = settleTargets.has(v.id) || cityTargets.has(v.id);
-              const ghost = hover?.kind === "vertex" && hover.id === v.id && hot;
+              const hovered = hover?.kind === "vertex" && hover.id === v.id;
+              const ghost = hot && !v.building;
               const color = owner?.color ?? youColor;
               const kind = v.building?.type ?? (cityTargets.has(v.id) ? "city" : "settlement");
               const url = kind === "city" ? citySprite(color) : settlementSprite(color);
               const tex = textures?.[url];
               const born = pops[v.id];
-              const scale = born && Date.now() - born < 180 ? 0.7 + ((Date.now() - born) / 180) * 0.3 : 1;
+              const age = born ? Math.min(1, (performance.now() - born) / 180) : 1;
+              const popScale = born ? 0.7 + age * 0.3 : 1;
               const visible = Boolean(v.building) || ghost;
               return (
                 <pixiContainer
                   key={v.id}
                   x={p.x}
                   y={p.y}
-                  scale={scale}
+                  scale={hovered && ghost ? 1.1 : popScale}
                   eventMode="static"
                   cursor={hot || v.building ? "pointer" : "default"}
+                  hitArea={VERTEX_HIT}
                   onPointerTap={() => clickVertex(v.id)}
                   onPointerOver={() => setHover({ kind: "vertex", id: v.id })}
                   onPointerOut={() => setHover((h) => (h?.id === v.id ? null : h))}
                 >
-                  {hot && !visible ? <PulseDot /> : null}
-                  {visible && tex ? <pixiSprite texture={tex} anchor={0.5} alpha={v.building ? 1 : 0.5} /> : null}
+                  {ghost ? <PulseDot /> : null}
+                  {visible && tex ? (
+                    <pixiSprite
+                      texture={tex}
+                      anchor={0.5}
+                      alpha={v.building ? 1 : hovered ? 0.95 : 0.5}
+                      eventMode="none"
+                    />
+                  ) : null}
                 </pixiContainer>
               );
             })}
@@ -435,7 +464,7 @@ function RobberSprite({
   });
   const tex = textures?.[`/sprites/robber-${frame}.png`];
   if (!tex) return null;
-  return <pixiSprite texture={tex} x={x} y={y} anchor={0.5} />;
+  return <pixiSprite texture={tex} x={x} y={y} anchor={0.5} eventMode="none" />;
 }
 
 function FallbackHex({ terrain }: { terrain: string }) {
