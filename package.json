@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "start": "NODE_ENV=production tsx src/server/index.ts"
+    "start": "NODE_ENV=production tsx src/server/index.ts",
+    "sprites": "node scripts/generate-sprites.mjs"
   },
   "dependencies": {
     "@pixi/react": "^8.0.5",

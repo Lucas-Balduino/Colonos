@@ -1,11 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
-import { Badge } from "@/components/ui/badge.tsx";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card.tsx";
 import { ScrollArea } from "@/components/ui/scroll-area.tsx";
-import { Separator } from "@/components/ui/separator.tsx";
 import { RESOURCES, RESOURCE_LABEL, countResources, emptyResources } from "../core/index.ts";
 import type { Action, PublicView, Resource, ResourceMap } from "../core/types.ts";
+import { CARD_SPRITE, diceSprite } from "./assets.ts";
+import { sfx } from "./audio.ts";
 import { phaseCopy } from "./copy.ts";
 
 export function Hud({
@@ -14,7 +13,7 @@ export function Hud({
   interactive,
 }: {
   view: PublicView;
-  onAction: (a: Action) => void;
+  onAction: (a: Action) => boolean | void;
   interactive: boolean;
 }) {
   const you = view.players.find((p) => p.isYou);
@@ -22,6 +21,10 @@ export function Hud({
   const legal = view.legal;
   const [give, setGive] = useState<Resource | null>(null);
   const [discard, setDiscard] = useState<ResourceMap>(emptyResources());
+  const [rolling, setRolling] = useState(false);
+  const [faces, setFaces] = useState<[number, number]>(view.dice ?? [1, 1]);
+  const prevDice = useRef(view.dice);
+  const prevWinner = useRef(view.winnerId);
 
   const discardCount = countResources(discard);
   const discardNeed = useMemo(() => {
@@ -29,6 +32,32 @@ export function Hud({
     const n = countResources(you.resources);
     return n > 7 ? Math.floor(n / 2) : 0;
   }, [view.phase, you]);
+
+  useEffect(() => {
+    if (!view.dice || view.dice === prevDice.current) {
+      if (view.dice) setFaces(view.dice);
+      return;
+    }
+    prevDice.current = view.dice;
+    setRolling(true);
+    sfx("dice");
+    let n = 0;
+    const id = window.setInterval(() => {
+      n += 1;
+      setFaces([1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)]);
+      if (n >= 10) {
+        window.clearInterval(id);
+        setFaces(view.dice!);
+        setRolling(false);
+      }
+    }, 45);
+    return () => window.clearInterval(id);
+  }, [view.dice]);
+
+  useEffect(() => {
+    if (view.winnerId && view.winnerId !== prevWinner.current) sfx("win");
+    prevWinner.current = view.winnerId;
+  }, [view.winnerId]);
 
   const tapDiscard = (r: Resource) => {
     if (!you?.resources) return;
@@ -38,85 +67,83 @@ export function Hud({
     setDiscard(next);
   };
 
+  const act = (a: Action) => {
+    sfx("click");
+    onAction(a);
+  };
+
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden p-3 md:w-[340px] md:shrink-0">
-      <Card className="border-primary/40">
-        <CardHeader className="pb-2">
-          <CardTitle className="font-pixel text-base tracking-wide">Colonos</CardTitle>
-          <p className="text-muted-foreground text-xs">
-            {phaseCopy(view.phase, yourTurn && interactive)}
-          </p>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-2">
-          <DiceFace dice={view.dice} />
+    <aside className="flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden p-3 md:w-[360px] md:shrink-0">
+      <div className="wood-panel p-3">
+        <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Ilha das Lanternas</p>
+        <h2 className="text-lg leading-none">Colonos</h2>
+        <p className="text-muted-foreground mt-2 text-xs">{phaseCopy(view.phase, yourTurn && interactive)}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <DicePair faces={faces} rolling={rolling} empty={!view.dice && !rolling} />
           {view.winnerId ? (
-            <Badge variant="default">
+            <span className="bg-primary text-primary-foreground px-2 py-1 text-xs">
               Vitória: {view.players.find((p) => p.id === view.winnerId)?.name}
-            </Badge>
+            </span>
           ) : (
-            <Badge variant="secondary">Turno {view.turnNumber || "—"}</Badge>
+            <span className="bg-secondary px-2 py-1 text-xs">Turno {view.turnNumber || "—"}</span>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       <div className="grid grid-cols-2 gap-2">
         {view.players.map((p) => (
-          <div
+          <PlayerPlaque
             key={p.id}
-            className="rounded-md border px-2 py-1.5 text-xs"
-            style={{ borderColor: p.color, opacity: p.id === view.currentPlayerId ? 1 : 0.75 }}
-          >
-            <div className="flex items-center justify-between gap-1">
-              <span className="truncate font-semibold" style={{ color: p.color }}>
-                {p.name}
-                {p.isYou ? " (você)" : p.isBot ? " · bot" : ""}
-              </span>
-              <span>{p.publicVp} VP</span>
-            </div>
-            <div className="text-muted-foreground mt-0.5 flex justify-between">
-              <span>{p.resourceCount} cartas</span>
-              <span>
-                {p.settlementCount}A {p.cityCount}C {p.knightsPlayed}K
-              </span>
-            </div>
-            {view.longestRoadPlayerId === p.id ? <span className="text-[10px]">Maior estrada</span> : null}
-            {view.largestArmyPlayerId === p.id ? <span className="text-[10px]"> Maior exército</span> : null}
-          </div>
+            name={`${p.name}${p.isYou ? " (você)" : p.isBot ? " · bot" : ""}`}
+            color={p.color}
+            vp={p.publicVp}
+            cards={p.resourceCount}
+            settlements={p.settlementCount}
+            cities={p.cityCount}
+            knights={p.knightsPlayed}
+            active={p.id === view.currentPlayerId}
+            winner={p.id === view.winnerId}
+            longest={view.longestRoadPlayerId === p.id}
+            army={view.largestArmyPlayerId === p.id}
+          />
         ))}
       </div>
 
       {you?.resources ? (
-        <Card>
-          <CardHeader className="py-2">
-            <CardTitle className="text-sm">Sua mão</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-1">
+        <div className="wood-panel p-3">
+          <p className="mb-2 text-sm">Sua mão</p>
+          <div className="flex flex-wrap gap-1">
             {RESOURCES.map((r) => (
               <button
                 key={r}
                 type="button"
-                className="rounded-sm border px-2 py-1 text-xs"
+                className="pixel-btn bg-parchment text-night flex min-w-[3.2rem] flex-col items-center px-1 py-1"
                 onClick={() => {
                   if (discardNeed) tapDiscard(r);
                   else setGive(give === r ? null : r);
                 }}
               >
-                <span className="block text-[10px] uppercase">{RESOURCE_LABEL[r]}</span>
-                <span className="text-base font-bold">{you.resources![r]}</span>
-                {discardNeed ? <span className="block text-[10px]">-{discard[r]}</span> : null}
+                <img src={CARD_SPRITE[r]} alt="" className="pixelated h-10 w-7" />
+                <span className="text-[9px] uppercase">{RESOURCE_LABEL[r]}</span>
+                <span className="text-sm leading-none font-bold">{you.resources![r]}</span>
+                {discardNeed ? <span className="text-[9px]">-{discard[r]}</span> : null}
               </button>
             ))}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
 
       {you?.devCards && you.devCards.length > 0 ? (
         <div className="flex flex-wrap gap-1">
           {you.devCards.map((c, i) => (
-            <Badge key={`${c.type}-${i}`} variant={c.playable ? "default" : "secondary"}>
+            <span
+              key={`${c.type}-${i}`}
+              className={`pixel-btn inline-flex items-center gap-1 px-2 py-1 text-[11px] ${c.playable ? "bg-primary text-primary-foreground" : "bg-secondary"}`}
+            >
+              <img src={CARD_SPRITE[c.type]} alt="" className="pixelated h-6 w-4" />
               {devLabel(c.type)}
               {!c.playable ? " (nova)" : ""}
-            </Badge>
+            </span>
           ))}
         </div>
       ) : null}
@@ -124,34 +151,26 @@ export function Hud({
       {interactive ? (
         <div className="flex flex-wrap gap-2">
           {legal.some((a) => a.type === "ROLL") ? (
-            <Button onClick={() => onAction({ type: "ROLL", playerId: you!.id })}>Rolar dados</Button>
+            <Button onClick={() => act({ type: "ROLL", playerId: you!.id })}>Rolar dados</Button>
           ) : null}
           {legal.some((a) => a.type === "BUY_DEV") ? (
-            <Button variant="secondary" onClick={() => onAction({ type: "BUY_DEV", playerId: you!.id })}>
+            <Button variant="secondary" onClick={() => act({ type: "BUY_DEV", playerId: you!.id })}>
               Comprar carta
             </Button>
           ) : null}
           {legal.some((a) => a.type === "PLAY_KNIGHT") ? (
-            <Button variant="outline" onClick={() => onAction({ type: "PLAY_KNIGHT", playerId: you!.id })}>
+            <Button variant="outline" onClick={() => act({ type: "PLAY_KNIGHT", playerId: you!.id })}>
               Cavaleiro
             </Button>
           ) : null}
           {legal.some((a) => a.type === "PLAY_ROAD_BUILDING") ? (
-            <Button
-              variant="outline"
-              onClick={() => onAction({ type: "PLAY_ROAD_BUILDING", playerId: you!.id })}
-            >
+            <Button variant="outline" onClick={() => act({ type: "PLAY_ROAD_BUILDING", playerId: you!.id })}>
               2 estradas
             </Button>
           ) : null}
           {legal.some((a) => a.type === "PLAY_MONOPOLY")
             ? RESOURCES.map((r) => (
-                <Button
-                  key={r}
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onAction({ type: "PLAY_MONOPOLY", playerId: you!.id, resource: r })}
-                >
+                <Button key={r} size="sm" variant="outline" onClick={() => act({ type: "PLAY_MONOPOLY", playerId: you!.id, resource: r })}>
                   Monopólio {RESOURCE_LABEL[r]}
                 </Button>
               ))
@@ -161,18 +180,13 @@ export function Hud({
             .slice(0, 5)
             .map((a, i) =>
               a.type === "PLAY_YEAR_OF_PLENTY" ? (
-                <Button
-                  key={i}
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onAction(a)}
-                >
+                <Button key={i} size="sm" variant="outline" onClick={() => act(a)}>
                   Fartura {RESOURCE_LABEL[a.resources[0]]}+{RESOURCE_LABEL[a.resources[1]]}
                 </Button>
               ) : null,
             )}
           {legal.some((a) => a.type === "END_TURN") ? (
-            <Button variant="secondary" onClick={() => onAction({ type: "END_TURN", playerId: you!.id })}>
+            <Button variant="secondary" onClick={() => act({ type: "END_TURN", playerId: you!.id })}>
               Encerrar turno
             </Button>
           ) : null}
@@ -180,12 +194,12 @@ export function Hud({
       ) : null}
 
       {discardNeed > 0 && you ? (
-        <div className="rounded-md border p-2 text-sm">
+        <div className="wood-panel p-3 text-sm">
           <p className="mb-2">Descarte {discardNeed} cartas ({discardCount} escolhidas).</p>
           <Button
             disabled={discardCount !== discardNeed}
             onClick={() => {
-              onAction({ type: "DISCARD", playerId: you.id, resources: discard });
+              act({ type: "DISCARD", playerId: you.id, resources: discard });
               setDiscard(emptyResources());
             }}
           >
@@ -200,7 +214,7 @@ export function Hud({
             .filter((a) => a.type === "STEAL")
             .map((a) =>
               a.type === "STEAL" ? (
-                <Button key={a.from} onClick={() => onAction(a)}>
+                <Button key={a.from} onClick={() => act(a)}>
                   Roubar {view.players.find((p) => p.id === a.from)?.name}
                 </Button>
               ) : null,
@@ -209,14 +223,14 @@ export function Hud({
       ) : null}
 
       {yourTurn && view.phase.type === "main" && you && give ? (
-        <div className="rounded-md border p-2 text-xs">
+        <div className="wood-panel p-3 text-xs">
           <p className="mb-1">Banco: oferecer {RESOURCE_LABEL[give]}</p>
           <div className="flex flex-wrap gap-1">
             {legal
               .filter((a) => a.type === "TRADE_BANK" && a.give === give)
               .map((a) =>
                 a.type === "TRADE_BANK" ? (
-                  <Button key={a.take} size="sm" onClick={() => onAction(a)}>
+                  <Button key={a.take} size="sm" onClick={() => act(a)}>
                     Por {RESOURCE_LABEL[a.take]}
                   </Button>
                 ) : null,
@@ -228,12 +242,12 @@ export function Hud({
       {view.tradeOffers.length > 0 ? (
         <div className="space-y-1 text-xs">
           {view.tradeOffers.map((o) => (
-            <div key={o.id} className="flex items-center justify-between gap-2 rounded border px-2 py-1">
+            <div key={o.id} className="wood-panel flex items-center justify-between gap-2 px-2 py-1">
               <span>
                 {view.players.find((p) => p.id === o.from)?.name} oferece {fmt(o.give)} por {fmt(o.want)}
               </span>
               {you && o.from !== you.id ? (
-                <Button size="sm" onClick={() => onAction({ type: "ACCEPT_TRADE", playerId: you.id, offerId: o.id })}>
+                <Button size="sm" onClick={() => act({ type: "ACCEPT_TRADE", playerId: you.id, offerId: o.id })}>
                   Aceitar
                 </Button>
               ) : null}
@@ -242,15 +256,83 @@ export function Hud({
         </div>
       ) : null}
 
-      <Separator />
-      <ScrollArea className="min-h-24 flex-1">
-        <ul className="space-y-1 text-[11px] text-muted-foreground">
-          {[...view.log].reverse().map((e, i) => (
-            <li key={`${e.text}-${i}`}>{e.text}</li>
-          ))}
-        </ul>
-      </ScrollArea>
+      <div className="parchment-log min-h-24 flex-1 overflow-hidden">
+        <ScrollArea className="h-full">
+          <ul className="space-y-1 p-2 text-[11px] text-[#3d2a1f]">
+            {[...view.log].reverse().map((e, i) => (
+              <li key={`${e.text}-${i}`}>{e.text}</li>
+            ))}
+          </ul>
+        </ScrollArea>
+      </div>
     </aside>
+  );
+}
+
+function PlayerPlaque({
+  name,
+  color,
+  vp,
+  cards,
+  settlements,
+  cities,
+  knights,
+  active,
+  winner,
+  longest,
+  army,
+}: {
+  name: string;
+  color: string;
+  vp: number;
+  cards: number;
+  settlements: number;
+  cities: number;
+  knights: number;
+  active: boolean;
+  winner: boolean;
+  longest: boolean;
+  army: boolean;
+}) {
+  return (
+    <div
+      className={`wood-panel px-2 py-1.5 text-xs ${active ? "ring-2 ring-[#d4a017]" : "opacity-80"} ${winner ? "bg-[#8a6410]" : ""}`}
+      style={{ borderColor: color }}
+    >
+      <div className="flex items-center justify-between gap-1">
+        <span className="truncate font-semibold" style={{ color }}>
+          {name}
+        </span>
+        <span>{vp} PV</span>
+      </div>
+      <div className="text-muted-foreground mt-0.5 flex justify-between">
+        <span>{cards} cartas</span>
+        <span>
+          {settlements}A {cities}C {knights}K
+        </span>
+      </div>
+      {longest ? <span className="text-[10px] text-[#d4a017]">Maior estrada</span> : null}
+      {army ? <span className="text-[10px] text-[#d4a017]"> Maior exército</span> : null}
+    </div>
+  );
+}
+
+function DicePair({
+  faces,
+  rolling,
+  empty,
+}: {
+  faces: [number, number];
+  rolling: boolean;
+  empty: boolean;
+}) {
+  if (empty) return <span className="text-muted-foreground text-xs">Dados: —</span>;
+  return (
+    <div className={`flex items-center gap-1 ${rolling ? "animate-pulse" : ""}`}>
+      <img src={diceSprite(faces[0])} alt="" className="pixelated size-8" />
+      <img src={diceSprite(faces[1])} alt="" className="pixelated size-8" />
+      <span className="text-muted-foreground text-sm">= {faces[0] + faces[1]}</span>
+    </div>
   );
 }
 
@@ -276,15 +358,3 @@ function devLabel(t: string): string {
       return t;
   }
 }
-
-function DiceFace({ dice }: { dice: [number, number] | null }) {
-  if (!dice) return <span className="text-muted-foreground text-xs">Dados: —</span>;
-  return (
-    <div className="flex items-center gap-1 font-mono text-lg">
-      <span className="inline-flex size-8 items-center justify-center rounded-sm border bg-card">{dice[0]}</span>
-      <span className="inline-flex size-8 items-center justify-center rounded-sm border bg-card">{dice[1]}</span>
-      <span className="text-muted-foreground text-sm">= {dice[0] + dice[1]}</span>
-    </div>
-  );
-}
-

@@ -1,6 +1,8 @@
-# Colonos
+# Colonos — Ilha das Lanternas
 
 Fan game educacional em pixel art com as **regras base de Catan**: tabuleiro hexagonal modular, dados, recursos, estradas/aldeias/cidades, ladrão, cartas de desenvolvimento e pontuação até 10 VP.
+
+Identidade visual: paleta de 16 cores (madeira, ouro velho, lanternas), HUD em painéis de madeira, atlas em `public/sprites/` e mesa Pixi com pan/zoom inteiro. O motor em `src/core` é puro. Arquivo Figma do HUD: [Colonos — Ilha das Lanternas](https://www.figma.com/design/MFwkQlym7iN3wf1SVUO4Th).
 
 - **Solo**: você contra 3 bots heurísticos
 - **Hot-seat**: 3–4 humanos no mesmo navegador

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import type { CreateGameOptions } from "../core/types.ts";
+import { isMuted, setMuted, sfx } from "./audio.ts";
 
 export type LobbyIntent =
   | { mode: "solo"; opts: CreateGameOptions; viewerId: string }
@@ -18,6 +18,7 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
   const [code, setCode] = useState("");
   const [hotseats, setHotseats] = useState(4);
   const [bots, setBots] = useState(3);
+  const [mute, setMute] = useState(isMuted());
 
   const solo = (): CreateGameOptions => ({
     setup,
@@ -33,7 +34,7 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
   const hotseat = (): CreateGameOptions => ({
     setup,
     seed: Date.now() >>> 0,
-    players: ["Vermelho", "Azul", "Laranja", "Branco"].slice(0, hotseats).map((n, i) => ({
+    players: ["Vermelho", "Azul", "Laranja", "Marfim"].slice(0, hotseats).map((n, i) => ({
       id: `p${i + 1}`,
       name: n,
       color: COLORS[i]!,
@@ -41,28 +42,42 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
     })),
   });
 
-  return (
-    <div className="mx-auto flex min-h-dvh max-w-3xl flex-col justify-center gap-6 p-4">
-      <header className="text-center">
-        <p className="text-primary mb-1 text-xs tracking-[0.3em] uppercase">Ilha pixelada</p>
-        <h1 className="text-5xl font-bold tracking-wide md:text-7xl">COLONOS</h1>
-        <p className="text-muted-foreground mx-auto mt-3 max-w-lg text-sm">
-          Funde aldeias, abre estradas e disputa 10 pontos de vitória nas regras base de Catan.
-          Tabuleiro hexagonal, ladrão, cartas de desenvolvimento e bots com fome de tijolo.
-        </p>
-      </header>
+  const toggleMute = () => {
+    const next = !mute;
+    setMuted(next);
+    setMute(next);
+    if (!next) sfx("click");
+  };
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Nova partida</CardTitle>
-          <CardDescription>Escolha o mapa e como sentar à mesa.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <label className="block text-sm">
+  return (
+    <div className="relative min-h-dvh overflow-hidden">
+      <img
+        src="/sprites/poster.png"
+        alt=""
+        className="pixelated pointer-events-none absolute inset-0 h-full w-full object-cover opacity-40"
+      />
+      <div className="from-night/90 to-night/70 absolute inset-0 bg-gradient-to-b" />
+      <div className="relative mx-auto flex min-h-dvh max-w-3xl flex-col justify-center gap-5 p-4">
+        <header className="text-center">
+          <img src="/sprites/wordmark-hero.png" alt="COLONOS" className="pixelated mx-auto h-20 w-auto max-w-full md:h-28" />
+          <p className="text-gold mt-2 text-xs tracking-[0.32em] uppercase">Ilha das Lanternas</p>
+          <p className="text-muted-foreground mx-auto mt-3 max-w-lg text-sm">
+            Funde aldeias, abre estradas e disputa 10 pontos de vitória nas regras base de Catan. Mesa pixelada, ladrão
+            à solta, lanternas na costa.
+          </p>
+          <button type="button" className="pixel-btn bg-secondary mt-3 px-3 py-1 text-xs" onClick={toggleMute}>
+            {mute ? "Som: mudo" : "Som: ligado"}
+          </button>
+        </header>
+
+        <section className="wood-panel p-5">
+          <h2 className="text-xl">Nova partida</h2>
+          <p className="text-muted-foreground mb-4 text-sm">Escolha o mapa e como sentar à mesa.</p>
+          <label className="mb-3 block text-sm">
             Seu nome
             <Input className="mt-1" value={name} onChange={(e) => setName(e.target.value)} maxLength={16} />
           </label>
-          <div className="flex flex-wrap gap-2">
+          <div className="mb-3 flex flex-wrap gap-2">
             <Button variant={setup === "beginner" ? "default" : "outline"} onClick={() => setSetup("beginner")}>
               Mapa iniciante
             </Button>
@@ -71,18 +86,27 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
             </Button>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
-            <Button className="flex-1" onClick={() => onStart({ mode: "solo", opts: solo(), viewerId: "p1" })}>
+            <Button
+              className="flex-1"
+              onClick={() => {
+                sfx("click");
+                onStart({ mode: "solo", opts: solo(), viewerId: "p1" });
+              }}
+            >
               Solo contra 3 bots
             </Button>
             <Button
               className="flex-1"
               variant="secondary"
-              onClick={() => onStart({ mode: "hotseat", opts: hotseat(), viewerId: "p1" })}
+              onClick={() => {
+                sfx("click");
+                onStart({ mode: "hotseat", opts: hotseat(), viewerId: "p1" });
+              }}
             >
               Hot-seat ({hotseats} jogadores)
             </Button>
           </div>
-          <div className="flex items-center gap-2 text-xs">
+          <div className="mt-3 flex items-center gap-2 text-xs">
             <span>Hot-seat:</span>
             {[3, 4].map((n) => (
               <Button key={n} size="sm" variant={hotseats === n ? "default" : "outline"} onClick={() => setHotseats(n)}>
@@ -90,16 +114,12 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
               </Button>
             ))}
           </div>
-        </CardContent>
-      </Card>
+        </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Sala na web</CardTitle>
-          <CardDescription>Mesmo código, amigos no navegador. Sem conta.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap gap-2">
+        <section className="wood-panel p-5">
+          <h2 className="text-xl">Sala na web</h2>
+          <p className="text-muted-foreground mb-3 text-sm">Mesmo código, amigos no navegador. Sem conta.</p>
+          <div className="mb-3 flex flex-wrap gap-2">
             <span className="text-xs">Bots na sala:</span>
             {[0, 1, 2, 3].map((n) => (
               <Button key={n} size="sm" variant={bots === n ? "default" : "outline"} onClick={() => setBots(n)}>
@@ -107,20 +127,34 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
               </Button>
             ))}
           </div>
-          <Button onClick={() => onStart({ mode: "host", name, bots, setup })}>Criar sala</Button>
-          <div className="flex gap-2">
+          <Button
+            onClick={() => {
+              sfx("click");
+              onStart({ mode: "host", name, bots, setup });
+            }}
+          >
+            Criar sala
+          </Button>
+          <div className="mt-3 flex gap-2">
             <Input
               placeholder="Código da sala"
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
               maxLength={6}
             />
-            <Button variant="secondary" disabled={code.length < 4} onClick={() => onStart({ mode: "join", name, code })}>
+            <Button
+              variant="secondary"
+              disabled={code.length < 4}
+              onClick={() => {
+                sfx("click");
+                onStart({ mode: "join", name, code });
+              }}
+            >
               Entrar
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </section>
+      </div>
     </div>
   );
 }
