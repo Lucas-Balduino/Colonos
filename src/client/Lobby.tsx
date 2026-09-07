@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import type { CreateGameOptions } from "../core/types.ts";
 import { isMuted, setMuted, sfx } from "./audio.ts";
+import { preloadSprites } from "./preload.ts";
 
 export type LobbyIntent =
   | { mode: "solo"; opts: CreateGameOptions; viewerId: string }
@@ -20,6 +21,10 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
   const [bots, setBots] = useState(3);
   const [mute, setMute] = useState(isMuted());
   const [more, setMore] = useState<"none" | "hotseat" | "web">("none");
+
+  useEffect(() => {
+    preloadSprites();
+  }, []);
 
   const solo = (): CreateGameOptions => ({
     setup,

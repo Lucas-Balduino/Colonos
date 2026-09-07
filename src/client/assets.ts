@@ -1,6 +1,6 @@
 export const HEX_SIZE = 56;
 export const SPRITE_SIZE = 32;
-export const HEX_SPRITE_ANCHOR = { x: 0.5, y: 0.3846 } as const;
+export const HEX_SPRITE_ANCHOR = { x: 0.5, y: 0.5 } as const;
 
 export const FACTION_ID: Record<string, FactionId> = {
   "#c44536": "red",
@@ -18,6 +18,14 @@ export const TERRAIN_SPRITE: Record<string, string> = {
   wheat: "/sprites/hex-wheat.png",
   ore: "/sprites/hex-ore.png",
   desert: "/sprites/hex-desert.png",
+};
+
+export const CHIP_SPRITE: Record<string, string> = {
+  wood: "/sprites/chip-wood.png",
+  brick: "/sprites/chip-brick.png",
+  sheep: "/sprites/chip-sheep.png",
+  wheat: "/sprites/chip-wheat.png",
+  ore: "/sprites/chip-ore.png",
 };
 
 export const CARD_SPRITE: Record<string, string> = {
@@ -57,10 +65,19 @@ export const BOARD_URLS = [
   "/sprites/token.png",
   "/sprites/port-any.png",
   "/sprites/port-2.png",
-  "/sprites/lantern.png",
+  "/sprites/settlement-ghost.png",
+  "/sprites/city-ghost.png",
   ...["red", "blue", "orange", "ivory"].flatMap((id) => [
     `/sprites/settlement-${id}.png`,
     `/sprites/city-${id}.png`,
     `/sprites/road-${id}.png`,
   ]),
 ];
+
+export const HUD_URLS = [
+  ...Object.values(CARD_SPRITE),
+  ...Object.values(CHIP_SPRITE),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `/sprites/dice-${n}.png`),
+];
+
+export const ALL_SPRITE_URLS = [...new Set([...BOARD_URLS, ...HUD_URLS])];

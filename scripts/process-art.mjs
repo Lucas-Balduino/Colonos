@@ -19,11 +19,9 @@ mkdirSync(outDir, { recursive: true });
 export const HEX_SIZE = 56;
 const HEX_W = Math.round(Math.sqrt(3) * HEX_SIZE);
 const FACE_H = HEX_SIZE * 2;
-const CLIFF = 44;
-const HEX_CANVAS_W = HEX_W + 8;
-const HEX_CANVAS_H = FACE_H + CLIFF;
-const HEX_PAD_Y = 4;
-const HEX_ANCHOR_Y = (HEX_PAD_Y + HEX_SIZE) / HEX_CANVAS_H;
+const HEX_CANVAS_W = HEX_W;
+const HEX_CANVAS_H = FACE_H;
+const HEX_ANCHOR_Y = 0.5;
 
 const tmpDir = "/tmp/colonos-art";
 mkdirSync(tmpDir, { recursive: true });
@@ -220,31 +218,57 @@ function blit(dst, src, ox, oy) {
   }
 }
 
-function inPointyHex(x, y, cx, cy, size) {
-  const dx = x - cx;
-  const dy = y - cy;
-  const q = ((Math.sqrt(3) / 3) * dx - (1 / 3) * dy) / size;
-  const r = ((2 / 3) * dy) / size;
-  const s = -q - r;
-  return Math.max(Math.abs(q), Math.abs(r), Math.abs(s)) <= 1.02;
+function hexCorners(cx, cy, size) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = ((60 * i - 30) * Math.PI) / 180;
+    pts.push([cx + size * Math.cos(a), cy + size * Math.sin(a)]);
+  }
+  return pts;
 }
 
-/** Keep the hex face, trees/peaks above it, and the south 3D cliff. Punch square corners. */
-function maskHexTile(png) {
+function inPoly(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i][0];
+    const yi = pts[i][1];
+    const xj = pts[j][0];
+    const yj = pts[j][1];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi + 0.0001) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Identical pointy-top silhouette for every terrain. Terrain fills the hex; no floating cliffs. */
+function maskStrictHex(png) {
   const cx = (png.width - 1) / 2;
-  const cy = HEX_PAD_Y + HEX_SIZE;
-  const size = HEX_SIZE + 6;
-  const halfW = HEX_W * 0.52;
+  const cy = (png.height - 1) / 2;
+  const outer = hexCorners(cx, cy, HEX_SIZE - 0.2);
+  const inner = hexCorners(cx, cy, HEX_SIZE - 2.2);
+  const RIM = [42, 28, 20, 255];
+  const RIM_HI = [92, 64, 42, 255];
   for (let y = 0; y < png.height; y++) {
     for (let x = 0; x < png.width; x++) {
       const i = (y * png.width + x) * 4;
-      if (png.data[i + 3] < 8) continue;
-      if (inPointyHex(x, y, cx, cy, size)) continue;
-      if (y <= cy + 4 && Math.abs(x - cx) <= halfW) continue;
-      const t = Math.max(0, (y - (cy + HEX_SIZE * 0.42)) / (CLIFF + HEX_SIZE * 0.6));
-      const half = halfW * (1 - Math.min(0.28, t * 0.28));
-      if (y > cy && y < png.height && Math.abs(x - cx) <= half) continue;
-      png.data[i + 3] = 0;
+      if (!inPoly(x + 0.5, y + 0.5, outer)) {
+        png.data[i] = 0;
+        png.data[i + 1] = 0;
+        png.data[i + 2] = 0;
+        png.data[i + 3] = 0;
+        continue;
+      }
+      if (!inPoly(x + 0.5, y + 0.5, inner)) {
+        const hi = x + y < cx + cy;
+        png.data[i] = hi ? RIM_HI[0] : RIM[0];
+        png.data[i + 1] = hi ? RIM_HI[1] : RIM[1];
+        png.data[i + 2] = hi ? RIM_HI[2] : RIM[2];
+        png.data[i + 3] = 255;
+      } else if (png.data[i + 3] < 18) {
+        png.data[i] = RIM[0];
+        png.data[i + 1] = RIM[1];
+        png.data[i + 2] = RIM[2];
+        png.data[i + 3] = 255;
+      }
     }
   }
 }
@@ -350,14 +374,45 @@ function processHex(srcName, destName) {
   const png = loadKeyed(srcName);
   const box = bboxOf(png);
   if (!box) throw new Error(`empty hex ${srcName}`);
-  const cropped = crop(png, box, 2);
-  const scaled = fitWidth(cropped, HEX_W);
+  const cropped = crop(png, box, 0);
+  const insetX = Math.round(cropped.width * 0.1);
+  const insetY = Math.round(cropped.height * 0.08);
+  const faceH = Math.max(12, Math.round(cropped.height * 0.7));
+  const face = crop(cropped, {
+    minX: insetX,
+    minY: insetY,
+    maxX: cropped.width - 1 - insetX,
+    maxY: Math.min(cropped.height - 1, faceH) - insetY,
+  });
+  const scale = Math.max(HEX_W / face.width, FACE_H / face.height) * 1.22;
+  const dw = Math.max(1, Math.round(face.width * scale));
+  const dh = Math.max(1, Math.round(face.height * scale));
+  const scaled = scaleNN(face, dw, dh);
   const canvas = blank(HEX_CANVAS_W, HEX_CANVAS_H);
-  const ox = Math.floor((HEX_CANVAS_W - scaled.width) / 2);
-  const oy = HEX_PAD_Y;
-  blit(canvas, scaled, ox, oy);
-  maskHexTile(canvas);
+  blit(canvas, scaled, Math.floor((HEX_CANVAS_W - dw) / 2), Math.floor((HEX_CANVAS_H - dh) / 2));
+  maskStrictHex(canvas);
   writePng(destName, canvas);
+
+  const chip = blank(36, 36);
+  const cx = Math.floor(canvas.width / 2);
+  const cy = Math.floor(canvas.height / 2);
+  for (let y = 0; y < 36; y++) {
+    for (let x = 0; x < 36; x++) {
+      const sx = cx - 18 + x;
+      const sy = cy - 18 + y;
+      const dx = x - 17.5;
+      const dy = y - 17.5;
+      if (dx * dx + dy * dy > 17.5 * 17.5) continue;
+      if (sx < 0 || sy < 0 || sx >= canvas.width || sy >= canvas.height) continue;
+      const si = (sy * canvas.width + sx) * 4;
+      const di = (y * 36 + x) * 4;
+      chip.data[di] = canvas.data[si];
+      chip.data[di + 1] = canvas.data[si + 1];
+      chip.data[di + 2] = canvas.data[si + 2];
+      chip.data[di + 3] = canvas.data[si + 3];
+    }
+  }
+  writePng(destName.replace("hex-", "chip-"), chip);
 }
 
 function processSingle(srcName, destName, maxW, maxH) {
@@ -452,8 +507,61 @@ processSheet(
   200,
 );
 
-processSingle("token-hi.png", "token.png", 30, 30);
+processSingle("token-hi.png", "token.png", 48, 48);
 processSingle("lantern-marker.png", "lantern.png", 18, 28);
+
+function sliceSheet(srcName, destNames, maxW, maxH) {
+  const p = join(srcDir, srcName);
+  if (!existsSync(p)) return false;
+  const png = readPng(p);
+  keyDarkBackdrop(png);
+  chromaKey(png);
+  const n = destNames.length;
+  const sliceW = Math.floor(png.width / n);
+  destNames.forEach((name, i) => {
+    const piece = crop(png, {
+      minX: i * sliceW + 4,
+      minY: 4,
+      maxX: (i + 1) * sliceW - 5,
+      maxY: png.height - 5,
+    });
+    const box = bboxOf(piece);
+    const tight = box ? crop(piece, box, 1) : piece;
+    writePng(name, fitMax(tight, maxW, maxH));
+  });
+  return true;
+}
+
+sliceSheet("cards-resource.png", [
+  "card-wood.png",
+  "card-brick.png",
+  "card-sheep.png",
+  "card-wheat.png",
+  "card-ore.png",
+], 52, 72);
+sliceSheet("cards-dev.png", [
+  "card-knight.png",
+  "card-victory.png",
+  "card-roads.png",
+  "card-plenty.png",
+  "card-monopoly.png",
+], 52, 72);
+
+function makeGhost(srcName, destName) {
+  const png = PNG.sync.read(readFileSync(join(outDir, srcName)));
+  for (let i = 0; i < png.data.length; i += 4) {
+    if (png.data[i + 3] < 12) continue;
+    const l = png.data[i] * 0.3 + png.data[i + 1] * 0.55 + png.data[i + 2] * 0.15;
+    const g = Math.round(l * 0.7 + 48);
+    png.data[i] = g;
+    png.data[i + 1] = g;
+    png.data[i + 2] = Math.min(255, g + 4);
+    png.data[i + 3] = Math.round(png.data[i + 3] * 0.85);
+  }
+  writePng(destName, png);
+}
+makeGhost("settlement-ivory.png", "settlement-ghost.png");
+makeGhost("city-ivory.png", "city-ghost.png");
 
 const port = loadKeyed("port-hi.png");
 const portBlobs = connectedComponents(port, 250);

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { ScrollArea } from "@/components/ui/scroll-area.tsx";
-import { RESOURCES, RESOURCE_LABEL, countResources, emptyResources } from "../core/index.ts";
+import { RESOURCES, RESOURCE_LABEL, COSTS, countResources, emptyResources } from "../core/index.ts";
 import type { Action, PublicView, Resource, ResourceMap } from "../core/types.ts";
-import { CARD_SPRITE, diceSprite, settlementSprite } from "./assets.ts";
+import { CARD_SPRITE, CHIP_SPRITE, diceSprite, settlementSprite } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import { phaseCopy } from "./copy.ts";
 
@@ -136,31 +136,44 @@ export function Hud({
       {you?.resources ? (
         <div className="wood-panel p-3">
           <p className="mb-2 text-sm">Sua mão</p>
-          <div className="flex flex-wrap gap-1">
-            {RESOURCES.map((r) => (
-              <button
-                key={r}
-                type="button"
-                className={`pixel-btn flex min-w-[3.1rem] flex-col items-center px-1 py-1 ${
-                  give === r ? "bg-primary text-primary-foreground" : "bg-parchment text-night"
-                }`}
-                onClick={() => {
-                  if (discardNeed) tapDiscard(r);
-                  else setGive(give === r ? null : r);
-                }}
-              >
-                <img src={CARD_SPRITE[r]} alt="" className="pixelated h-10 w-7" />
-                <span className="text-[9px] uppercase">{RESOURCE_LABEL[r]}</span>
-                <span className="text-sm leading-none font-bold">{you.resources![r]}</span>
-                {discardNeed ? <span className="text-[9px]">-{discard[r]}</span> : null}
-              </button>
-            ))}
+          <div className="flex gap-1.5 overflow-x-auto pb-1">
+            {RESOURCES.map((r) => {
+              const n = you.resources![r];
+              const selected = give === r;
+              const inCost =
+                (view.phase.type === "main" && yourTurn && (COSTS.road[r] || COSTS.settlement[r] || COSTS.city[r])) ??
+                false;
+              return (
+                <button
+                  key={r}
+                  type="button"
+                  className={`resource-card ${selected ? "resource-card-on" : ""} ${n === 0 ? "opacity-55" : ""}`}
+                  onClick={() => {
+                    if (discardNeed) tapDiscard(r);
+                    else setGive(give === r ? null : r);
+                  }}
+                >
+                  <img src={CARD_SPRITE[r]} alt="" className="pixelated h-[4.6rem] w-[2.15rem] object-cover" />
+                  <span className="resource-seal">{n}</span>
+                  <span className="mt-1 text-[9px] leading-none uppercase">{RESOURCE_LABEL[r]}</span>
+                  {discardNeed ? <span className="text-[9px] text-[#8a6410]">-{discard[r]}</span> : null}
+                  {inCost && n > 0 ? <span className="sr-only">usado nas construções</span> : null}
+                </button>
+              );
+            })}
           </div>
           {yourTurn && view.phase.type === "main" ? (
-            <p className="text-muted-foreground mt-2 text-[10px]">
-              Estrada 1 madeira + 1 tijolo · Aldeia 1 de cada (sem minério) · Cidade 2 trigo + 3 minério
-            </p>
+            <div className="mt-3 space-y-1 text-[10px]">
+              <CostRow label="Estrada" parts={["wood", "brick"]} hand={you.resources} />
+              <CostRow label="Aldeia" parts={["wood", "brick", "sheep", "wheat"]} hand={you.resources} />
+              <CostRow label="Cidade" parts={["wheat", "wheat", "ore", "ore", "ore"]} hand={you.resources} />
+            </div>
           ) : null}
+          {give ? (
+            <p className="text-gold mt-2 text-[10px]">Toque de novo para cancelar. Ofereça {RESOURCE_LABEL[give]} ao banco.</p>
+          ) : (
+            <p className="text-muted-foreground mt-2 text-[10px]">Toque numa carta para negociar com o banco.</p>
+          )}
         </div>
       ) : null}
 
@@ -299,6 +312,34 @@ export function Hud({
         </ScrollArea>
       </div>
     </aside>
+  );
+}
+
+function CostRow({
+  label,
+  parts,
+  hand,
+}: {
+  label: string;
+  parts: Resource[];
+  hand: ResourceMap;
+}) {
+  const need: ResourceMap = { wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 };
+  for (const r of parts) need[r] += 1;
+  const ok = RESOURCES.every((r) => hand[r] >= need[r]);
+  return (
+    <div className={`flex items-center gap-1 ${ok ? "text-gold" : "text-muted-foreground"}`}>
+      <span className="w-12 shrink-0">{label}</span>
+      {parts.map((r, i) => (
+        <img
+          key={`${r}-${i}`}
+          src={CHIP_SPRITE[r]}
+          alt={RESOURCE_LABEL[r]}
+          className={`pixelated size-5 rounded-full ${hand[r] >= 1 ? "" : "opacity-35"}`}
+        />
+      ))}
+      {ok ? <span className="ml-1">pronta</span> : null}
+    </div>
   );
 }
 

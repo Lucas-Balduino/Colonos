@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Application, extend, useTick } from "@pixi/react";
-import { Assets, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
+import { Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
 import type { Graphics as PixiGraphics } from "pixi.js";
 import { toast } from "sonner";
 import { cubeDistance, hexCorner, hexId, parseHexId, pointyHexToPixel } from "../core/hex.ts";
@@ -17,6 +17,7 @@ import {
 import { sfx } from "./audio.ts";
 import { FACTION_HEX, PALETTE } from "./theme.ts";
 import { phaseCopy } from "./copy.ts";
+import { preloadSprites } from "./preload.ts";
 
 extend({ Container, Graphics, Sprite, Text });
 
@@ -78,25 +79,25 @@ function hexPath(from: HexId, to: HexId): HexId[] {
 
 function useTextures() {
   const [map, setMap] = useState<Record<string, Texture> | null>(null);
+  const [progress, setProgress] = useState(0);
   useEffect(() => {
     let live = true;
-    Assets.load(BOARD_URLS).then((loaded) => {
+    preloadSprites((p) => {
+      if (live) setProgress(p);
+    }).then((loaded) => {
       if (!live) return;
       const next: Record<string, Texture> = {};
       for (const url of BOARD_URLS) {
-        const tex = (loaded as Record<string, Texture>)[url];
-        if (tex) {
-          tex.source.scaleMode = "nearest";
-          next[url] = tex;
-        }
+        if (loaded[url]) next[url] = loaded[url]!;
       }
       setMap(next);
+      setProgress(1);
     });
     return () => {
       live = false;
     };
   }, []);
-  return map;
+  return { map, progress };
 }
 
 export function BoardView({
@@ -109,7 +110,7 @@ export function BoardView({
   interactive: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const textures = useTextures();
+  const { map: textures, progress } = useTextures();
   const you = view.you;
   const legal = view.legal;
   const [zoom, setZoom] = useState(1);
@@ -351,6 +352,7 @@ export function BoardView({
                 />
               ) : null;
             })}
+            <IslandBase board={view.board} />
             {landHexes.map((hex) => {
               const p = pointyHexToPixel(hex, HEX_SIZE);
               const url = TERRAIN_SPRITE[hex.terrain];
@@ -378,6 +380,7 @@ export function BoardView({
                 </pixiContainer>
               );
             })}
+            <IslandSeams board={view.board} />
             {landHexes.map((hex) => {
               if (hex.number === null) return null;
               const p = pointyHexToPixel(hex, HEX_SIZE);
@@ -385,7 +388,7 @@ export function BoardView({
                 <NumberToken
                   key={`tok-${hex.id}`}
                   x={p.x}
-                  y={p.y + 10}
+                  y={p.y + 2}
                   value={hex.number}
                   texture={textures?.["/sprites/token.png"]}
                   hot={flash.has(hex.id)}
@@ -444,14 +447,14 @@ export function BoardView({
                   onPointerOver={() => setHover({ kind: "edge", id: edge.id })}
                   onPointerOut={() => setHover((h) => (h?.id === edge.id ? null : h))}
                 >
-                  {show ? <RoadGroove ghost={ghost} hovered={hovered} color={color} /> : null}
-                  {show && tex ? (
+                  {show ? <RoadGroove ghost={ghost} hovered={hovered} color={color} built={Boolean(edge.road)} /> : null}
+                  {Boolean(edge.road) && tex ? (
                     <pixiSprite
                       texture={tex}
                       anchor={0.5}
-                      width={EDGE_LEN + 6}
-                      height={18}
-                      alpha={edge.road ? 1 : hovered ? 1 : 0.82}
+                      width={EDGE_LEN + 4}
+                      height={16}
+                      alpha={1}
                       eventMode="none"
                     />
                   ) : null}
@@ -468,17 +471,17 @@ export function BoardView({
               const kind = v.building?.type ?? (cityTargets.has(v.id) ? "city" : "settlement");
               const url = kind === "city" ? citySprite(color) : settlementSprite(color);
               const tex = textures?.[url];
-              const lantern = textures?.["/sprites/lantern.png"];
+              const ghostTex =
+                textures?.[kind === "city" ? "/sprites/city-ghost.png" : "/sprites/settlement-ghost.png"];
               const born = pops[v.id];
               const age = born ? Math.min(1, (performance.now() - born) / 180) : 1;
               const popScale = born ? 0.7 + age * 0.3 : 1;
-              const visible = Boolean(v.building) || ghost;
               return (
                 <pixiContainer
                   key={v.id}
                   x={p.x}
                   y={p.y}
-                  scale={hovered && ghost ? 1.12 : popScale}
+                  scale={hovered && ghost ? 1.08 : popScale}
                   eventMode="static"
                   cursor={hot || v.building ? "pointer" : "default"}
                   hitArea={VERTEX_HIT}
@@ -487,16 +490,17 @@ export function BoardView({
                   onPointerOut={() => setHover((h) => (h?.id === v.id ? null : h))}
                 >
                   {ghost ? <PulseDot /> : null}
-                  {ghost && lantern ? (
-                    <pixiSprite texture={lantern} y={-26} scale={1.7} anchor={0.5} alpha={1} eventMode="none" />
-                  ) : null}
-                  {visible && tex ? (
+                  {ghost && ghostTex ? (
                     <pixiSprite
-                      texture={tex}
+                      texture={ghostTex}
                       anchor={{ x: 0.5, y: 0.82 }}
-                      alpha={v.building ? 1 : hovered ? 1 : 0.88}
+                      scale={0.72}
+                      alpha={hovered ? 0.7 : 0.38}
                       eventMode="none"
                     />
+                  ) : null}
+                  {v.building && tex ? (
+                    <pixiSprite texture={tex} anchor={{ x: 0.5, y: 0.82 }} eventMode="none" />
                   ) : null}
                 </pixiContainer>
               );
@@ -532,6 +536,7 @@ export function BoardView({
           {phaseCopy(view.phase, yourTurn && interactive)}
         </p>
       </div>
+      {!textures ? <TableLoading progress={progress} /> : null}
     </div>
   );
 }
@@ -545,7 +550,7 @@ function boardHint(
 ): string {
   if (view.winnerId) return "A ilha tem um vencedor.";
   if (robbers) return "Clique num terreno para pousar o ladrão.";
-  if (settles) return "As lanternas marcam onde fundar uma aldeia.";
+  if (settles) return "Os pontos dourados marcam onde fundar uma aldeia.";
   if (cities) return "Troque a aldeia por uma cidadela.";
   if (roads) return "As tábuas douradas são estradas legais.";
   return "Arraste o mapa. A roda do rato aproxima.";
@@ -567,6 +572,78 @@ function RobberSprite({
   const tex = textures?.[`/sprites/robber-${frame}.png`];
   if (!tex) return null;
   return <pixiSprite texture={tex} x={x} y={y} anchor={{ x: 0.5, y: 0.85 }} eventMode="none" />;
+}
+
+function TableLoading({ progress }: { progress: number }) {
+  const pct = Math.round(Math.min(1, progress) * 100);
+  return (
+    <div className="table-loading absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 px-6">
+      <img src="/sprites/poster.png" alt="" className="pixelated pointer-events-none absolute inset-0 h-full w-full object-cover opacity-35" />
+      <div className="relative wood-panel max-w-sm p-5 text-center">
+        <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Ilha das Lanternas</p>
+        <h2 className="mt-1 text-2xl">Preparando a mesa</h2>
+        <p className="text-muted-foreground mt-2 text-sm">As lanternas acendem. Os terrenos encaixam na ilha.</p>
+        <div className="mt-4 h-3 w-full border-2 border-[#8a6410] bg-[#1a1520]">
+          <div className="h-full bg-[#d4a017]" style={{ width: `${pct}%` }} />
+        </div>
+        <p className="text-gold mt-2 text-xs">{pct}%</p>
+      </div>
+    </div>
+  );
+}
+
+function IslandBase({ board }: { board: Board }) {
+  const draw = useCallback(
+    (g: PixiGraphics) => {
+      g.clear();
+      for (const hex of Object.values(board.hexes)) {
+        const p = pointyHexToPixel(hex, HEX_SIZE);
+        const deep: number[] = [];
+        const mid: number[] = [];
+        for (let i = 0; i < 6; i++) {
+          const c = hexCorner(p, HEX_SIZE + 1, i);
+          deep.push(c.x, c.y + 14);
+          mid.push(c.x, c.y + 7);
+        }
+        g.poly(deep);
+        g.fill({ color: 0x1a100c });
+        g.poly(mid);
+        g.fill({ color: 0x3a281c });
+      }
+    },
+    [board],
+  );
+  return <pixiGraphics draw={draw} eventMode="none" />;
+}
+
+function IslandSeams({ board }: { board: Board }) {
+  const draw = useCallback(
+    (g: PixiGraphics) => {
+      g.clear();
+      for (const edge of Object.values(board.edges)) {
+        const a = vertexPos(board, edge.vertices[0]);
+        const b = vertexPos(board, edge.vertices[1]);
+        const lands = edge.hexes.filter((id) => board.hexes[id]).length;
+        if (lands === 2) {
+          g.moveTo(a.x, a.y);
+          g.lineTo(b.x, b.y);
+          g.stroke({ width: 6, color: 0x3d2a1f, alpha: 0.72 });
+          g.moveTo(a.x, a.y);
+          g.lineTo(b.x, b.y);
+          g.stroke({ width: 2, color: 0x6b4a32, alpha: 0.55 });
+        } else if (lands === 1) {
+          g.moveTo(a.x, a.y);
+          g.lineTo(b.x, b.y);
+          g.stroke({ width: 5, color: PALETTE.foam, alpha: 0.62 });
+          g.moveTo(a.x, a.y);
+          g.lineTo(b.x, b.y);
+          g.stroke({ width: 2, color: 0xf4e8c8, alpha: 0.4 });
+        }
+      }
+    },
+    [board],
+  );
+  return <pixiGraphics draw={draw} eventMode="none" />;
 }
 
 function FallbackHex({ terrain }: { terrain: string }) {
@@ -610,9 +687,9 @@ function NumberToken({
 }) {
   const red = value === 6 || value === 8;
   return (
-    <pixiContainer x={x} y={y} eventMode="none" scale={hot ? 1.12 : 1}>
+    <pixiContainer x={x} y={y} eventMode="none" scale={hot ? 1.18 : 1}>
       {texture ? (
-        <pixiSprite texture={texture} anchor={0.5} />
+        <pixiSprite texture={texture} anchor={0.5} scale={1.55} />
       ) : (
         <FallbackToken />
       )}
@@ -622,9 +699,10 @@ function NumberToken({
         y={1}
         style={{
           fontFamily: "Pixelify Sans, monospace",
-          fontSize: red ? 13 : 12,
+          fontSize: red ? 22 : 20,
           fill: red ? PALETTE.brick : PALETTE.night,
           fontWeight: "700",
+          stroke: { color: PALETTE.parchment, width: 4 },
         }}
       />
     </pixiContainer>
@@ -634,27 +712,42 @@ function NumberToken({
 function FallbackToken() {
   const draw = useCallback((g: PixiGraphics) => {
     g.clear();
-    g.circle(0, 0, 12);
+    g.circle(0, 0, 18);
     g.fill({ color: PALETTE.parchment });
-    g.stroke({ width: 2, color: PALETTE.goldDark });
+    g.stroke({ width: 3, color: PALETTE.goldDark });
   }, []);
   return <pixiGraphics draw={draw} />;
 }
 
-function RoadGroove({ ghost, hovered, color }: { ghost: boolean; hovered: boolean; color: string }) {
+function RoadGroove({
+  ghost,
+  hovered,
+  color,
+  built,
+}: {
+  ghost: boolean;
+  hovered: boolean;
+  color: string;
+  built: boolean;
+}) {
   const draw = useCallback(
     (g: PixiGraphics) => {
-      const L = EDGE_LEN + 4;
+      const L = EDGE_LEN + 2;
       g.clear();
-      g.roundRect(-L / 2, -7, L, 14, 3);
-      g.fill({ color: 0x23160f, alpha: ghost ? 0.72 : 0.92 });
-      g.roundRect(-L / 2 + 2, -5, L - 4, 10, 2);
-      g.fill({ color: 0x5a3d2a, alpha: ghost ? 0.85 : 1 });
+      if (!built && ghost) {
+        g.roundRect(-L / 2, -3, L, 6, 2);
+        g.fill({ color: PALETTE.gold, alpha: hovered ? 0.7 : 0.38 });
+        return;
+      }
+      g.roundRect(-L / 2, -6, L, 12, 2);
+      g.fill({ color: 0x23160f, alpha: 0.95 });
+      g.roundRect(-L / 2 + 2, -4, L - 4, 8, 1);
+      g.fill({ color: 0x5a3d2a });
       const stripe = FACTION_HEX[color] ?? 0xe8e0d0;
       g.roundRect(-L / 2 + 8, -2, L - 16, 4, 1);
-      g.fill({ color: stripe, alpha: ghost ? (hovered ? 1 : 0.8) : 1 });
+      g.fill({ color: stripe });
     },
-    [ghost, hovered, color],
+    [ghost, hovered, color, built],
   );
   return <pixiGraphics draw={draw} />;
 }
@@ -666,10 +759,12 @@ function PulseDot() {
     (g: PixiGraphics) => {
       const s = Math.sin(t / 220);
       g.clear();
-      g.circle(0, 2, 9 + s * 2);
-      g.fill({ color: PALETTE.gold, alpha: 0.22 + s * 0.12 });
-      g.circle(0, 2, 9 + s * 2);
-      g.stroke({ width: 2, color: PALETTE.gold, alpha: 0.85 + s * 0.15 });
+      g.circle(0, 1, 5 + s * 1.5);
+      g.fill({ color: PALETTE.gold, alpha: 0.28 + s * 0.16 });
+      g.circle(0, 1, 4);
+      g.fill({ color: PALETTE.parchment, alpha: 0.85 });
+      g.circle(0, 1, 5 + s * 1.5);
+      g.stroke({ width: 1.5, color: PALETTE.gold, alpha: 0.9 });
     },
     [t],
   );
