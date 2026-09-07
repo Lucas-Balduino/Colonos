@@ -133,6 +133,15 @@ export function Hud({
         ))}
       </div>
 
+      <div className="wood-panel p-2">
+        <p className="mb-1 text-[10px] tracking-[0.2em] uppercase text-[#d4a017]">Custos</p>
+        <div className="space-y-1 text-[10px]">
+          <CostRow label="Estrada" parts={["wood", "brick"]} hand={you?.resources} />
+          <CostRow label="Aldeia" parts={["wood", "brick", "sheep", "wheat"]} hand={you?.resources} />
+          <CostRow label="Cidade" parts={["wheat", "wheat", "ore", "ore", "ore"]} hand={you?.resources} />
+        </div>
+      </div>
+
       {you?.resources ? (
         <div className="wood-panel p-3">
           <p className="mb-2 text-sm">Sua mão</p>
@@ -162,13 +171,6 @@ export function Hud({
               );
             })}
           </div>
-          {yourTurn && view.phase.type === "main" ? (
-            <div className="mt-3 space-y-1 text-[10px]">
-              <CostRow label="Estrada" parts={["wood", "brick"]} hand={you.resources} />
-              <CostRow label="Aldeia" parts={["wood", "brick", "sheep", "wheat"]} hand={you.resources} />
-              <CostRow label="Cidade" parts={["wheat", "wheat", "ore", "ore", "ore"]} hand={you.resources} />
-            </div>
-          ) : null}
           {give ? (
             <p className="text-gold mt-2 text-[10px]">Toque de novo para cancelar. Ofereça {RESOURCE_LABEL[give]} ao banco.</p>
           ) : (
@@ -322,11 +324,12 @@ function CostRow({
 }: {
   label: string;
   parts: Resource[];
-  hand: ResourceMap;
+  hand?: ResourceMap | null;
 }) {
+  const have = hand ?? { wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 };
   const need: ResourceMap = { wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 };
   for (const r of parts) need[r] += 1;
-  const ok = RESOURCES.every((r) => hand[r] >= need[r]);
+  const ok = RESOURCES.every((r) => have[r] >= need[r]);
   return (
     <div className={`flex items-center gap-1 ${ok ? "text-gold" : "text-muted-foreground"}`}>
       <span className="w-12 shrink-0">{label}</span>
@@ -335,7 +338,7 @@ function CostRow({
           key={`${r}-${i}`}
           src={CHIP_SPRITE[r]}
           alt={RESOURCE_LABEL[r]}
-          className={`pixelated size-5 rounded-full ${hand[r] >= 1 ? "" : "opacity-35"}`}
+          className={`pixelated size-5 rounded-full ${have[r] >= need[r] ? "" : "opacity-35"}`}
         />
       ))}
       {ok ? <span className="ml-1">pronta</span> : null}

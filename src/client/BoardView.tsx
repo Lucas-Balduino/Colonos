@@ -21,8 +21,8 @@ import { preloadSprites } from "./preload.ts";
 
 extend({ Container, Graphics, Sprite, Text });
 
-const VERTEX_HIT = new Rectangle(-22, -28, 44, 50);
-const EDGE_HIT = new Rectangle(-32, -16, 64, 32);
+const VERTEX_HIT = new Rectangle(-24, -30, 48, 54);
+const EDGE_HIT = new Rectangle(-36, -18, 72, 36);
 const EDGE_LEN = HEX_SIZE;
 
 function vertexPos(board: Board, vid: string): { x: number; y: number } {
@@ -495,7 +495,7 @@ export function BoardView({
                       texture={ghostTex}
                       anchor={{ x: 0.5, y: 0.82 }}
                       scale={0.72}
-                      alpha={hovered ? 0.7 : 0.38}
+                      alpha={hovered ? 0.75 : 0.5}
                       eventMode="none"
                     />
                   ) : null}
@@ -730,13 +730,22 @@ function RoadGroove({
   color: string;
   built: boolean;
 }) {
+  const [t, setT] = useState(0);
+  useTick(() => {
+    if (ghost) setT(performance.now());
+  });
   const draw = useCallback(
     (g: PixiGraphics) => {
       const L = EDGE_LEN + 2;
       g.clear();
       if (!built && ghost) {
-        g.roundRect(-L / 2, -3, L, 6, 2);
-        g.fill({ color: PALETTE.gold, alpha: hovered ? 0.7 : 0.38 });
+        const s = Math.sin(t / 200);
+        g.roundRect(-L / 2, -6, L, 12, 3);
+        g.fill({ color: 0xf4e8c8, alpha: 0.35 + s * 0.12 });
+        g.roundRect(-L / 2 + 2, -4, L - 4, 8, 2);
+        g.fill({ color: PALETTE.gold, alpha: hovered ? 1 : 0.82 + s * 0.12 });
+        g.roundRect(-L / 2 + 6, -2, L - 12, 4, 1);
+        g.fill({ color: 0xffe27a, alpha: 0.95 });
         return;
       }
       g.roundRect(-L / 2, -6, L, 12, 2);
@@ -747,7 +756,7 @@ function RoadGroove({
       g.roundRect(-L / 2 + 8, -2, L - 16, 4, 1);
       g.fill({ color: stripe });
     },
-    [ghost, hovered, color, built],
+    [ghost, hovered, color, built, t],
   );
   return <pixiGraphics draw={draw} />;
 }
@@ -759,12 +768,12 @@ function PulseDot() {
     (g: PixiGraphics) => {
       const s = Math.sin(t / 220);
       g.clear();
-      g.circle(0, 1, 5 + s * 1.5);
-      g.fill({ color: PALETTE.gold, alpha: 0.28 + s * 0.16 });
-      g.circle(0, 1, 4);
-      g.fill({ color: PALETTE.parchment, alpha: 0.85 });
-      g.circle(0, 1, 5 + s * 1.5);
-      g.stroke({ width: 1.5, color: PALETTE.gold, alpha: 0.9 });
+      g.circle(0, 1, 8 + s * 2);
+      g.fill({ color: PALETTE.gold, alpha: 0.35 + s * 0.18 });
+      g.circle(0, 1, 5);
+      g.fill({ color: PALETTE.parchment });
+      g.circle(0, 1, 8 + s * 2);
+      g.stroke({ width: 2, color: PALETTE.gold, alpha: 1 });
     },
     [t],
   );
