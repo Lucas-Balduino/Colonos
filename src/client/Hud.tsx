@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { ScrollArea } from "@/components/ui/scroll-area.tsx";
 import { RESOURCES, RESOURCE_LABEL, countResources, emptyResources } from "../core/index.ts";
 import type { Action, PublicView, Resource, ResourceMap } from "../core/types.ts";
-import { CARD_SPRITE, diceSprite } from "./assets.ts";
+import { CARD_SPRITE, diceSprite, settlementSprite } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import { phaseCopy } from "./copy.ts";
 
@@ -72,26 +72,50 @@ export function Hud({
     onAction(a);
   };
 
+  const current = view.players.find((p) => p.id === view.currentPlayerId);
+  const others = view.players.filter((p) => p.id !== view.currentPlayerId);
+
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden p-3 md:w-[360px] md:shrink-0">
+    <aside className="flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden p-3 md:w-[340px] md:shrink-0">
       <div className="wood-panel p-3">
-        <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Ilha das Lanternas</p>
-        <h2 className="text-lg leading-none">Colonos</h2>
-        <p className="text-muted-foreground mt-2 text-xs">{phaseCopy(view.phase, yourTurn && interactive)}</p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Ilha das Lanternas</p>
+            <h2 className="text-xl leading-none">Colonos</h2>
+          </div>
           <DicePair faces={faces} rolling={rolling} empty={!view.dice && !rolling} />
-          {view.winnerId ? (
-            <span className="bg-primary text-primary-foreground px-2 py-1 text-xs">
-              Vitória: {view.players.find((p) => p.id === view.winnerId)?.name}
-            </span>
-          ) : (
-            <span className="bg-secondary px-2 py-1 text-xs">Turno {view.turnNumber || "—"}</span>
-          )}
         </div>
+        <p className="gold-ribbon mt-3 px-2 py-1 text-center text-xs">
+          {phaseCopy(view.phase, yourTurn && interactive)}
+        </p>
+        {view.winnerId ? (
+          <p className="bg-primary text-primary-foreground mt-2 px-2 py-1 text-center text-xs">
+            Vitória: {view.players.find((p) => p.id === view.winnerId)?.name}
+          </p>
+        ) : (
+          <p className="text-muted-foreground mt-2 text-center text-[11px]">Turno {view.turnNumber || 0}</p>
+        )}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        {view.players.map((p) => (
+      {current ? (
+        <PlayerPlaque
+          name={`${current.name}${current.isYou ? " (você)" : current.isBot ? " · bot" : ""}`}
+          color={current.color}
+          vp={current.publicVp}
+          cards={current.resourceCount}
+          settlements={current.settlementCount}
+          cities={current.cityCount}
+          knights={current.knightsPlayed}
+          active
+          winner={current.id === view.winnerId}
+          longest={view.longestRoadPlayerId === current.id}
+          army={view.largestArmyPlayerId === current.id}
+          featured
+        />
+      ) : null}
+
+      <div className="flex flex-col gap-1">
+        {others.map((p) => (
           <PlayerPlaque
             key={p.id}
             name={`${p.name}${p.isYou ? " (você)" : p.isBot ? " · bot" : ""}`}
@@ -101,7 +125,7 @@ export function Hud({
             settlements={p.settlementCount}
             cities={p.cityCount}
             knights={p.knightsPlayed}
-            active={p.id === view.currentPlayerId}
+            active={false}
             winner={p.id === view.winnerId}
             longest={view.longestRoadPlayerId === p.id}
             army={view.largestArmyPlayerId === p.id}
@@ -117,7 +141,9 @@ export function Hud({
               <button
                 key={r}
                 type="button"
-                className="pixel-btn bg-parchment text-night flex min-w-[3.2rem] flex-col items-center px-1 py-1"
+                className={`pixel-btn flex min-w-[3.1rem] flex-col items-center px-1 py-1 ${
+                  give === r ? "bg-primary text-primary-foreground" : "bg-parchment text-night"
+                }`}
                 onClick={() => {
                   if (discardNeed) tapDiscard(r);
                   else setGive(give === r ? null : r);
@@ -130,6 +156,11 @@ export function Hud({
               </button>
             ))}
           </div>
+          {yourTurn && view.phase.type === "main" ? (
+            <p className="text-muted-foreground mt-2 text-[10px]">
+              Estrada 1 madeira + 1 tijolo · Aldeia 1 de cada (sem minério) · Cidade 2 trigo + 3 minério
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -151,7 +182,9 @@ export function Hud({
       {interactive ? (
         <div className="flex flex-wrap gap-2">
           {legal.some((a) => a.type === "ROLL") ? (
-            <Button onClick={() => act({ type: "ROLL", playerId: you!.id })}>Rolar dados</Button>
+            <Button className="h-11 flex-1" onClick={() => act({ type: "ROLL", playerId: you!.id })}>
+              Rolar dados
+            </Button>
           ) : null}
           {legal.some((a) => a.type === "BUY_DEV") ? (
             <Button variant="secondary" onClick={() => act({ type: "BUY_DEV", playerId: you!.id })}>
@@ -186,7 +219,7 @@ export function Hud({
               ) : null,
             )}
           {legal.some((a) => a.type === "END_TURN") ? (
-            <Button variant="secondary" onClick={() => act({ type: "END_TURN", playerId: you!.id })}>
+            <Button variant="secondary" className="flex-1" onClick={() => act({ type: "END_TURN", playerId: you!.id })}>
               Encerrar turno
             </Button>
           ) : null}
@@ -281,6 +314,7 @@ function PlayerPlaque({
   winner,
   longest,
   army,
+  featured,
 }: {
   name: string;
   color: string;
@@ -293,24 +327,35 @@ function PlayerPlaque({
   winner: boolean;
   longest: boolean;
   army: boolean;
+  featured?: boolean;
 }) {
   return (
     <div
-      className={`wood-panel px-2 py-1.5 text-xs ${active ? "ring-2 ring-[#d4a017]" : "opacity-80"} ${winner ? "bg-[#8a6410]" : ""}`}
+      className={`wood-panel px-2 py-1.5 text-xs ${active ? "ring-2 ring-[#d4a017]" : "opacity-75"} ${winner ? "bg-[#8a6410]" : ""}`}
       style={{ borderColor: color }}
     >
       <div className="flex items-center justify-between gap-1">
-        <span className="truncate font-semibold" style={{ color }}>
-          {name}
+        <span className="flex min-w-0 items-center gap-1.5 font-semibold" style={{ color }}>
+          <img src={settlementSprite(color)} alt="" className="pixelated h-5 w-5 shrink-0" />
+          <span className="truncate">{name}</span>
         </span>
-        <span>{vp} PV</span>
+        <span className="text-gold shrink-0">{vp} PV</span>
       </div>
-      <div className="text-muted-foreground mt-0.5 flex justify-between">
-        <span>{cards} cartas</span>
-        <span>
-          {settlements}A {cities}C {knights}K
-        </span>
-      </div>
+      {featured ? (
+        <div className="text-muted-foreground mt-1 flex justify-between">
+          <span>{cards} cartas</span>
+          <span>
+            {settlements} aldeias · {cities} cidades · {knights} cav.
+          </span>
+        </div>
+      ) : (
+        <div className="text-muted-foreground mt-0.5 flex justify-between">
+          <span>{cards}c</span>
+          <span>
+            {settlements}A {cities}C {knights}K
+          </span>
+        </div>
+      )}
       {longest ? <span className="text-[10px] text-[#d4a017]">Maior estrada</span> : null}
       {army ? <span className="text-[10px] text-[#d4a017]"> Maior exército</span> : null}
     </div>
@@ -326,12 +371,12 @@ function DicePair({
   rolling: boolean;
   empty: boolean;
 }) {
-  if (empty) return <span className="text-muted-foreground text-xs">Dados: —</span>;
+  if (empty) return <span className="text-muted-foreground text-xs">Dados</span>;
   return (
     <div className={`flex items-center gap-1 ${rolling ? "animate-pulse" : ""}`}>
-      <img src={diceSprite(faces[0])} alt="" className="pixelated size-8" />
-      <img src={diceSprite(faces[1])} alt="" className="pixelated size-8" />
-      <span className="text-muted-foreground text-sm">= {faces[0] + faces[1]}</span>
+      <img src={diceSprite(faces[0])} alt="" className="pixelated size-10" />
+      <img src={diceSprite(faces[1])} alt="" className="pixelated size-10" />
+      <span className="text-gold text-sm">{faces[0] + faces[1]}</span>
     </div>
   );
 }

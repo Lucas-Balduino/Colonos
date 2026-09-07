@@ -19,6 +19,7 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
   const [hotseats, setHotseats] = useState(4);
   const [bots, setBots] = useState(3);
   const [mute, setMute] = useState(isMuted());
+  const [more, setMore] = useState<"none" | "hotseat" | "web">("none");
 
   const solo = (): CreateGameOptions => ({
     setup,
@@ -54,106 +55,134 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
       <img
         src="/sprites/poster.png"
         alt=""
-        className="pixelated pointer-events-none absolute inset-0 h-full w-full object-cover opacity-40"
+        className="pixelated pointer-events-none absolute inset-0 h-full w-full object-cover"
       />
-      <div className="from-night/90 to-night/70 absolute inset-0 bg-gradient-to-b" />
-      <div className="relative mx-auto flex min-h-dvh max-w-3xl flex-col justify-center gap-5 p-4">
+      <div className="lobby-vignette absolute inset-0" />
+      <div className="relative mx-auto flex min-h-dvh max-w-lg flex-col justify-end gap-4 p-4 pb-8 sm:justify-center">
         <header className="text-center">
-          <img src="/sprites/wordmark-hero.png" alt="COLONOS" className="pixelated mx-auto h-20 w-auto max-w-full md:h-28" />
-          <p className="text-gold mt-2 text-xs tracking-[0.32em] uppercase">Ilha das Lanternas</p>
-          <p className="text-muted-foreground mx-auto mt-3 max-w-lg text-sm">
-            Funde aldeias, abre estradas e disputa 10 pontos de vitória nas regras base de Catan. Mesa pixelada, ladrão
-            à solta, lanternas na costa.
+          <img
+            src="/sprites/wordmark.png"
+            alt="COLONOS"
+            className="pixelated mx-auto h-10 w-auto max-w-full drop-shadow-[0_2px_0_#0d0a10] md:h-12"
+          />
+          <p className="text-gold mt-2 text-xs tracking-[0.38em] uppercase">Ilha das Lanternas</p>
+          <p className="text-parchment mx-auto mt-3 max-w-md text-sm drop-shadow-[0_1px_4px_#0d0a10]">
+            Uma mesa de madeira, tiles de três polegadas, lanternas na costa. Funde aldeias, abre estradas e chegue a
+            10 pontos. Regras base de Catan.
           </p>
-          <button type="button" className="pixel-btn bg-secondary mt-3 px-3 py-1 text-xs" onClick={toggleMute}>
-            {mute ? "Som: mudo" : "Som: ligado"}
-          </button>
         </header>
 
         <section className="wood-panel p-5">
-          <h2 className="text-xl">Nova partida</h2>
-          <p className="text-muted-foreground mb-4 text-sm">Escolha o mapa e como sentar à mesa.</p>
           <label className="mb-3 block text-sm">
-            Seu nome
+            Seu nome na mesa
             <Input className="mt-1" value={name} onChange={(e) => setName(e.target.value)} maxLength={16} />
           </label>
-          <div className="mb-3 flex flex-wrap gap-2">
-            <Button variant={setup === "beginner" ? "default" : "outline"} onClick={() => setSetup("beginner")}>
+          <div className="mb-4 flex gap-2">
+            <Button className="flex-1" variant={setup === "beginner" ? "default" : "outline"} onClick={() => setSetup("beginner")}>
               Mapa iniciante
             </Button>
-            <Button variant={setup === "random" ? "default" : "outline"} onClick={() => setSetup("random")}>
+            <Button className="flex-1" variant={setup === "random" ? "default" : "outline"} onClick={() => setSetup("random")}>
               Mapa aleatório
             </Button>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <Button
+            className="h-12 w-full text-base"
+            onClick={() => {
+              sfx("click");
+              onStart({ mode: "solo", opts: solo(), viewerId: "p1" });
+            }}
+          >
+            Sentar à mesa (solo, 3 bots)
+          </Button>
+          <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+            <button type="button" className="pixel-btn bg-secondary px-3 py-1" onClick={toggleMute}>
+              {mute ? "Som: mudo" : "Som: ligado"}
+            </button>
+            <span className="text-muted-foreground">Fan game educacional</span>
+          </div>
+        </section>
+
+        <div className="flex gap-2">
+          <Button
+            variant={more === "hotseat" ? "default" : "secondary"}
+            className="flex-1"
+            onClick={() => setMore(more === "hotseat" ? "none" : "hotseat")}
+          >
+            Mesmo computador
+          </Button>
+          <Button
+            variant={more === "web" ? "default" : "secondary"}
+            className="flex-1"
+            onClick={() => setMore(more === "web" ? "none" : "web")}
+          >
+            Sala na web
+          </Button>
+        </div>
+
+        {more === "hotseat" ? (
+          <section className="wood-panel p-4">
+            <h2 className="text-lg">Hot-seat</h2>
+            <p className="text-muted-foreground mb-3 text-sm">Passem o rato. 3 ou 4 humanos, sem bots.</p>
+            <div className="mb-3 flex gap-2">
+              {[3, 4].map((n) => (
+                <Button key={n} size="sm" variant={hotseats === n ? "default" : "outline"} onClick={() => setHotseats(n)}>
+                  {n} jogadores
+                </Button>
+              ))}
+            </div>
             <Button
-              className="flex-1"
-              onClick={() => {
-                sfx("click");
-                onStart({ mode: "solo", opts: solo(), viewerId: "p1" });
-              }}
-            >
-              Solo contra 3 bots
-            </Button>
-            <Button
-              className="flex-1"
-              variant="secondary"
+              className="w-full"
               onClick={() => {
                 sfx("click");
                 onStart({ mode: "hotseat", opts: hotseat(), viewerId: "p1" });
               }}
             >
-              Hot-seat ({hotseats} jogadores)
+              Abrir a mesa
             </Button>
-          </div>
-          <div className="mt-3 flex items-center gap-2 text-xs">
-            <span>Hot-seat:</span>
-            {[3, 4].map((n) => (
-              <Button key={n} size="sm" variant={hotseats === n ? "default" : "outline"} onClick={() => setHotseats(n)}>
-                {n}
-              </Button>
-            ))}
-          </div>
-        </section>
+          </section>
+        ) : null}
 
-        <section className="wood-panel p-5">
-          <h2 className="text-xl">Sala na web</h2>
-          <p className="text-muted-foreground mb-3 text-sm">Mesmo código, amigos no navegador. Sem conta.</p>
-          <div className="mb-3 flex flex-wrap gap-2">
-            <span className="text-xs">Bots na sala:</span>
-            {[0, 1, 2, 3].map((n) => (
-              <Button key={n} size="sm" variant={bots === n ? "default" : "outline"} onClick={() => setBots(n)}>
-                {n}
-              </Button>
-            ))}
-          </div>
-          <Button
-            onClick={() => {
-              sfx("click");
-              onStart({ mode: "host", name, bots, setup });
-            }}
-          >
-            Criar sala
-          </Button>
-          <div className="mt-3 flex gap-2">
-            <Input
-              placeholder="Código da sala"
-              value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
-              maxLength={6}
-            />
+        {more === "web" ? (
+          <section className="wood-panel p-4">
+            <h2 className="text-lg">Sala compartilhada</h2>
+            <p className="text-muted-foreground mb-3 text-sm">Um código de 6 letras. Sem conta.</p>
+            <div className="mb-3 flex flex-wrap gap-2">
+              <span className="text-xs">Bots:</span>
+              {[0, 1, 2, 3].map((n) => (
+                <Button key={n} size="sm" variant={bots === n ? "default" : "outline"} onClick={() => setBots(n)}>
+                  {n}
+                </Button>
+              ))}
+            </div>
             <Button
-              variant="secondary"
-              disabled={code.length < 4}
+              className="mb-3 w-full"
               onClick={() => {
                 sfx("click");
-                onStart({ mode: "join", name, code });
+                onStart({ mode: "host", name, bots, setup });
               }}
             >
-              Entrar
+              Criar sala
             </Button>
-          </div>
-        </section>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Código"
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase())}
+                maxLength={6}
+              />
+              <Button
+                variant="secondary"
+                disabled={code.length < 4}
+                onClick={() => {
+                  sfx("click");
+                  onStart({ mode: "join", name, code });
+                }}
+              >
+                Entrar
+              </Button>
+            </div>
+          </section>
+        ) : null}
       </div>
     </div>
   );

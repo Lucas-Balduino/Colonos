@@ -133,3 +133,33 @@ body {
     inset 0 0 0 2px #e8d9a8,
     4px 4px 0 #0d0a10;
 }
+
+.board-felt {
+  background:
+    radial-gradient(ellipse at 50% 42%, #1a4d63 0%, #123445 42%, #0a1c26 100%);
+  box-shadow: inset 0 0 0 8px #3d2a1f, inset 0 0 0 12px #8a6410;
+}
+
+.wood-dock {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      #3d2a1f 0px,
+      #4a3428 6px,
+      #3d2a1f 12px
+    ),
+    linear-gradient(180deg, #5c4030 0%, #3d2a1f 40%, #241610 100%);
+  border-left: 8px solid #8a6410;
+  box-shadow: inset 4px 0 0 #5c4030;
+}
+
+.lobby-vignette {
+  background: linear-gradient(to top, var(--night) 0%, rgb(26 21 32 / 0.55) 42%, rgb(26 21 32 / 0.12) 100%);
+}
+
+.gold-ribbon {
+  background: linear-gradient(180deg, #e0b33a 0%, var(--gold) 50%, #8a6410 100%);
+  color: var(--night);
+  border: 2px solid var(--gold-dark);
+  box-shadow: 2px 2px 0 #0d0a10;
+}

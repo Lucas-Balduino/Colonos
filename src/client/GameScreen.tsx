@@ -55,20 +55,20 @@ export function TableLayout({
   };
 
   return (
-    <div className="flex min-h-dvh flex-col md:flex-row">
-      <div className="relative min-h-[52vh] flex-1 md:min-h-dvh">
+    <div className="flex min-h-dvh flex-col bg-[#0a1c26] md:flex-row">
+      <div className="relative min-h-[58vh] flex-1 md:min-h-dvh">
         <BoardView view={view} onAction={dispatch} interactive={interactive} />
         <button type="button" className="wood-panel absolute top-3 left-3 z-10 px-3 py-1 text-xs" onClick={onLeave}>
           Sair
         </button>
-        <div className="absolute right-3 bottom-3 z-10 md:hidden">
+        <div className="absolute right-3 bottom-14 z-10 md:hidden">
           <Button size="sm" onClick={() => setSheet(true)}>
             Mesa
           </Button>
           <Sheet open={sheet} onOpenChange={setSheet}>
             <SheetContent
               side="bottom"
-              className="max-h-[78vh] overflow-y-auto border-[#8a6410] bg-[#2a2133] p-0"
+              className="max-h-[78vh] overflow-y-auto border-[#8a6410] bg-[#3d2a1f] p-0"
               showCloseButton
             >
               <SheetHeader className="sr-only">
@@ -79,7 +79,7 @@ export function TableLayout({
           </Sheet>
         </div>
       </div>
-      <div className="hidden md:flex md:h-dvh">
+      <div className="wood-dock hidden md:flex md:h-dvh">
         <Hud view={view} onAction={dispatch} interactive={interactive} />
       </div>
     </div>

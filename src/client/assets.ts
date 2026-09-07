@@ -1,5 +1,6 @@
-export const HEX_SIZE = 48;
+export const HEX_SIZE = 56;
 export const SPRITE_SIZE = 32;
+export const HEX_SPRITE_ANCHOR = { x: 0.5, y: 0.3846 } as const;
 
 export const FACTION_ID: Record<string, FactionId> = {
   "#c44536": "red",
@@ -56,6 +57,7 @@ export const BOARD_URLS = [
   "/sprites/token.png",
   "/sprites/port-any.png",
   "/sprites/port-2.png",
+  "/sprites/lantern.png",
   ...["red", "blue", "orange", "ivory"].flatMap((id) => [
     `/sprites/settlement-${id}.png`,
     `/sprites/city-${id}.png`,
