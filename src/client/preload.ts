@@ -12,23 +12,28 @@ export function preloadSprites(onProgress?: (p: number) => void): Promise<Record
   }
   if (cache) return Promise.resolve(cache);
   if (!inflight) {
-    inflight = Assets.load(ALL_SPRITE_URLS, (p: number) => {
-      listeners.forEach((fn) => fn(p));
-    }).then((loaded) => {
+    inflight = (async () => {
       const next: Record<string, Texture> = {};
-      const bag = loaded as Record<string, Texture> | Texture[];
-      for (let i = 0; i < ALL_SPRITE_URLS.length; i++) {
-        const url = ALL_SPRITE_URLS[i]!;
-        const tex = Array.isArray(bag) ? bag[i] : bag[url];
-        if (tex) {
-          tex.source.scaleMode = "nearest";
-          next[url] = tex;
-        }
-      }
+      let done = 0;
+      const total = ALL_SPRITE_URLS.length;
+      await Promise.all(
+        ALL_SPRITE_URLS.map(async (url) => {
+          try {
+            const tex = (await Assets.load(url)) as Texture;
+            tex.source.scaleMode = "nearest";
+            next[url] = tex;
+          } catch {
+            /* optional slice missing */
+          } finally {
+            done += 1;
+            listeners.forEach((fn) => fn(done / total));
+          }
+        }),
+      );
       cache = next;
       listeners.forEach((fn) => fn(1));
       return next;
-    });
+    })();
   }
   return inflight;
 }

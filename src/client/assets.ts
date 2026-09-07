@@ -1,6 +1,40 @@
 export const HEX_SIZE = 56;
 export const SPRITE_SIZE = 32;
 export const HEX_SPRITE_ANCHOR = { x: 0.5, y: 0.5 } as const;
+/** Slight overlap so sliced land tiles share a pixel and hide gaps. */
+export const HEX_DRAW_SCALE = 1.04;
+
+export const BEGINNER_AXIAL: Array<[number, number]> = [
+  [0, -2],
+  [1, -2],
+  [2, -2],
+  [-1, -1],
+  [0, -1],
+  [1, -1],
+  [2, -1],
+  [-2, 0],
+  [-1, 0],
+  [0, 0],
+  [1, 0],
+  [2, 0],
+  [-2, 1],
+  [-1, 1],
+  [0, 1],
+  [1, 1],
+  [-2, 2],
+  [-1, 2],
+  [0, 2],
+];
+
+export function landTileUrl(q: number, r: number): string {
+  return `/sprites/land_${q}_${r}.png`;
+}
+
+export function isBeginnerLayout(hexes: Record<string, { terrain: string; number: number | null }>): boolean {
+  const c = hexes["0,0"];
+  const n = hexes["0,-2"];
+  return c?.terrain === "desert" && n?.terrain === "ore" && n?.number === 10;
+}
 
 export const FACTION_ID: Record<string, FactionId> = {
   "#c44536": "red",
@@ -59,6 +93,7 @@ export function diceSprite(n: number): string {
 
 export const BOARD_URLS = [
   ...Object.values(TERRAIN_SPRITE),
+  ...BEGINNER_AXIAL.map(([q, r]) => landTileUrl(q, r)),
   "/sprites/hex-sea.png",
   "/sprites/robber-0.png",
   "/sprites/robber-1.png",

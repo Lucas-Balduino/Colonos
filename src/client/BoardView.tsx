@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Application, extend, useTick } from "@pixi/react";
-import { Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
+import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import type { Graphics as PixiGraphics } from "pixi.js";
 import { toast } from "sonner";
 import { cubeDistance, hexCorner, hexId, parseHexId, pointyHexToPixel } from "../core/hex.ts";
@@ -8,8 +8,11 @@ import type { Action, Board, HexId, PublicView } from "../core/types.ts";
 import {
   BOARD_URLS,
   citySprite,
+  HEX_DRAW_SCALE,
   HEX_SIZE,
   HEX_SPRITE_ANCHOR,
+  isBeginnerLayout,
+  landTileUrl,
   roadSprite,
   settlementSprite,
   TERRAIN_SPRITE,
@@ -21,9 +24,21 @@ import { preloadSprites } from "./preload.ts";
 
 extend({ Container, Graphics, Sprite, Text });
 
-const VERTEX_HIT = new Rectangle(-24, -30, 48, 54);
-const EDGE_HIT = new Rectangle(-36, -18, 72, 36);
 const EDGE_LEN = HEX_SIZE;
+const DRAG_SLOP = 10;
+const VERTEX_PICK = 30;
+const EDGE_PICK = 20;
+const HEX_PICK = HEX_SIZE * 0.78;
+
+function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 0.001) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
 
 function vertexPos(board: Board, vid: string): { x: number; y: number } {
   for (const h of Object.values(board.hexes)) {
@@ -122,7 +137,14 @@ export function BoardView({
   const [robberPos, setRobberPos] = useState(view.board.robberHexId);
   const [flash, setFlash] = useState<Set<string>>(new Set());
   const [pops, setPops] = useState<Record<string, number>>({});
-  const drag = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
+  const drag = useRef<{ sx: number; sy: number; px: number; py: number; moved: boolean } | null>(null);
+  const panRef = useRef(pan);
+  const zoomRef = useRef(zoom);
+  const nudgeRef = useRef(nudge);
+  const originRef = useRef({ x: 0, y: 0 });
+  panRef.current = pan;
+  zoomRef.current = zoom;
+  nudgeRef.current = nudge;
   const prevDice = useRef(view.dice);
   const prevRobber = useRef(view.board.robberHexId);
   const prevBuildings = useRef<string>("");
@@ -135,6 +157,19 @@ export function BoardView({
     setSize({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
   }, []);
+
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    const sync = () => {
+      const canvas = el.querySelector("canvas");
+      if (canvas) canvas.style.pointerEvents = "none";
+    };
+    sync();
+    const mo = new MutationObserver(sync);
+    mo.observe(el, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [textures]);
 
   useEffect(() => {
     if (!shakeUntil) return;
@@ -201,6 +236,7 @@ export function BoardView({
     }
     return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 + 18 };
   }, [view.board]);
+  originRef.current = origin;
 
   const sortedVertices = useMemo(() => {
     return Object.values(view.board.vertices).sort((a, b) => {
@@ -297,6 +333,51 @@ export function BoardView({
     if (robberTargets.size) invalid();
   };
 
+  const clientToWorld = (clientX: number, clientY: number) => {
+    const el = host.current;
+    if (!el) return { x: 0, y: 0 };
+    const rect = el.getBoundingClientRect();
+    const localX = clientX - rect.left;
+    const localY = clientY - rect.top;
+    const z = zoomRef.current;
+    const cx = el.clientWidth / 2 + panRef.current.x + nudgeRef.current;
+    const cy = el.clientHeight / 2 + panRef.current.y;
+    return {
+      x: (localX - cx) / z + originRef.current.x,
+      y: (localY - cy) / z + originRef.current.y,
+    };
+  };
+
+  const pickAt = (world: { x: number; y: number }) => {
+    let best: { kind: "vertex" | "edge" | "hex"; id: string; d: number } | null = null;
+    const consider = (kind: "vertex" | "edge" | "hex", id: string, d: number, limit: number) => {
+      if (d > limit) return;
+      if (!best || d < best.d) best = { kind, id, d };
+    };
+    for (const id of settleTargets) {
+      const p = vertexPos(view.board, id);
+      consider("vertex", id, Math.hypot(world.x - p.x, world.y - p.y), VERTEX_PICK);
+    }
+    for (const id of cityTargets) {
+      const p = vertexPos(view.board, id);
+      consider("vertex", id, Math.hypot(world.x - p.x, world.y - p.y), VERTEX_PICK);
+    }
+    for (const id of roadTargets) {
+      const edge = view.board.edges[id];
+      if (!edge) continue;
+      const a = vertexPos(view.board, edge.vertices[0]);
+      const b = vertexPos(view.board, edge.vertices[1]);
+      consider("edge", id, distToSegment(world.x, world.y, a.x, a.y, b.x, b.y), EDGE_PICK);
+    }
+    for (const id of robberTargets.keys()) {
+      const hex = view.board.hexes[id];
+      if (!hex) continue;
+      const p = pointyHexToPixel(hex, HEX_SIZE);
+      consider("hex", id, Math.hypot(world.x - p.x, world.y - p.y), HEX_PICK);
+    }
+    return best;
+  };
+
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     setZoom((z) => Math.min(3, Math.max(1, z + (e.deltaY < 0 ? 1 : -1))));
@@ -304,16 +385,28 @@ export function BoardView({
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
-    drag.current = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y, moved: false };
   };
   const onPointerMove = (e: React.PointerEvent) => {
+    const world = clientToWorld(e.clientX, e.clientY);
+    const hit = pickAt(world);
+    setHover(hit ? { kind: hit.kind, id: hit.id } : null);
     const d = drag.current;
     if (!d) return;
-    if (Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) < 4) return;
+    if (Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) < DRAG_SLOP) return;
+    d.moved = true;
     setPan({ x: d.px + (e.clientX - d.sx), y: d.py + (e.clientY - d.sy) });
   };
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
+    const d = drag.current;
     drag.current = null;
+    if (!d || d.moved) return;
+    const hit = pickAt(clientToWorld(e.clientX, e.clientY));
+    if (!hit) return;
+    if (hit.kind === "vertex") clickVertex(hit.id);
+    else if (hit.kind === "edge") clickEdge(hit.id);
+    else clickHex(hit.id);
   };
 
   const youPlayer = view.players.find((p) => p.id === you);
@@ -322,16 +415,27 @@ export function BoardView({
   const robberPixel = robberHex ? pointyHexToPixel(robberHex, HEX_SIZE) : { x: 0, y: 0 };
   const yourTurn = Boolean(you && you === view.currentPlayerId);
   const hint = boardHint(view, settleTargets.size, cityTargets.size, roadTargets.size, robberTargets.size);
+  const beginner = isBeginnerLayout(view.board.hexes);
+  const canClick = Boolean(
+    hover &&
+      ((hover.kind === "vertex" && (settleTargets.has(hover.id) || cityTargets.has(hover.id))) ||
+        (hover.kind === "edge" && roadTargets.has(hover.id)) ||
+        (hover.kind === "hex" && robberTargets.has(hover.id))),
+  );
 
   return (
     <div
       ref={host}
       className="board-felt relative h-full min-h-[420px] w-full touch-none overflow-hidden"
+      style={{ cursor: canClick ? "pointer" : "grab" }}
       onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onPointerLeave={() => {
+        if (!drag.current) setHover(null);
+      }}
     >
       <Application resizeTo={host} background={0x0c2433} antialias={false} roundPixels preference="webgl">
         <pixiContainer x={size.w / 2 + pan.x + nudge} y={size.h / 2 + pan.y} scale={zoom}>
@@ -355,7 +459,8 @@ export function BoardView({
             <IslandBase board={view.board} />
             {landHexes.map((hex) => {
               const p = pointyHexToPixel(hex, HEX_SIZE);
-              const url = TERRAIN_SPRITE[hex.terrain];
+              const slice = beginner ? landTileUrl(hex.q, hex.r) : TERRAIN_SPRITE[hex.terrain];
+              const url = textures?.[slice] ? slice : TERRAIN_SPRITE[hex.terrain];
               const tex = url ? textures?.[url] : undefined;
               const canRob = robberTargets.has(hex.id);
               const lit = flash.has(hex.id);
@@ -364,14 +469,15 @@ export function BoardView({
                   key={hex.id}
                   x={p.x}
                   y={p.y}
-                  eventMode={canRob ? "static" : "none"}
-                  cursor={canRob ? "pointer" : "default"}
-                  onPointerTap={() => clickHex(hex.id)}
-                  onPointerOver={() => canRob && setHover({ kind: "hex", id: hex.id })}
-                  onPointerOut={() => setHover((h) => (h?.id === hex.id ? null : h))}
+                  eventMode="none"
                 >
                   {tex ? (
-                    <pixiSprite texture={tex} anchor={HEX_SPRITE_ANCHOR} eventMode="none" />
+                    <pixiSprite
+                      texture={tex}
+                      anchor={HEX_SPRITE_ANCHOR}
+                      scale={HEX_DRAW_SCALE}
+                      eventMode="none"
+                    />
                   ) : (
                     <FallbackHex terrain={hex.terrain} />
                   )}
@@ -380,7 +486,7 @@ export function BoardView({
                 </pixiContainer>
               );
             })}
-            <IslandSeams board={view.board} />
+            <CoastFoam board={view.board} />
             {landHexes.map((hex) => {
               if (hex.number === null) return null;
               const p = pointyHexToPixel(hex, HEX_SIZE);
@@ -440,12 +546,7 @@ export function BoardView({
                   x={(a.x + b.x) / 2}
                   y={(a.y + b.y) / 2}
                   rotation={ang}
-                  eventMode="static"
-                  cursor={hot ? "pointer" : "default"}
-                  hitArea={EDGE_HIT}
-                  onPointerTap={() => clickEdge(edge.id)}
-                  onPointerOver={() => setHover({ kind: "edge", id: edge.id })}
-                  onPointerOut={() => setHover((h) => (h?.id === edge.id ? null : h))}
+                  eventMode="none"
                 >
                   {show ? <RoadGroove ghost={ghost} hovered={hovered} color={color} built={Boolean(edge.road)} /> : null}
                   {Boolean(edge.road) && tex ? (
@@ -481,25 +582,20 @@ export function BoardView({
                   key={v.id}
                   x={p.x}
                   y={p.y}
-                  scale={hovered && ghost ? 1.08 : popScale}
-                  eventMode="static"
-                  cursor={hot || v.building ? "pointer" : "default"}
-                  hitArea={VERTEX_HIT}
-                  onPointerTap={() => clickVertex(v.id)}
-                  onPointerOver={() => setHover({ kind: "vertex", id: v.id })}
-                  onPointerOut={() => setHover((h) => (h?.id === v.id ? null : h))}
+                  scale={hovered && ghost ? 1.12 : popScale}
+                  eventMode="none"
                 >
                   {ghost ? <PulseDot /> : null}
-                  {ghost && ghostTex ? (
+                  {ghost && !hovered && ghostTex ? (
                     <pixiSprite
                       texture={ghostTex}
                       anchor={{ x: 0.5, y: 0.82 }}
                       scale={0.72}
-                      alpha={hovered ? 0.75 : 0.5}
+                      alpha={0.55}
                       eventMode="none"
                     />
                   ) : null}
-                  {v.building && tex ? (
+                  {((ghost && hovered) || v.building) && tex ? (
                     <pixiSprite texture={tex} anchor={{ x: 0.5, y: 0.82 }} eventMode="none" />
                   ) : null}
                 </pixiContainer>
@@ -552,7 +648,7 @@ function boardHint(
   if (robbers) return "Clique num terreno para pousar o ladrão.";
   if (settles) return "Os pontos dourados marcam onde fundar uma aldeia.";
   if (cities) return "Troque a aldeia por uma cidadela.";
-  if (roads) return "As tábuas douradas são estradas legais.";
+  if (roads) return "Toque nas tábuas douradas junto da aldeia para abrir a estrada.";
   return "Arraste o mapa. A roda do rato aproxima.";
 }
 
@@ -599,16 +695,12 @@ function IslandBase({ board }: { board: Board }) {
       for (const hex of Object.values(board.hexes)) {
         const p = pointyHexToPixel(hex, HEX_SIZE);
         const deep: number[] = [];
-        const mid: number[] = [];
         for (let i = 0; i < 6; i++) {
-          const c = hexCorner(p, HEX_SIZE + 1, i);
-          deep.push(c.x, c.y + 14);
-          mid.push(c.x, c.y + 7);
+          const c = hexCorner(p, HEX_SIZE + 8, i);
+          deep.push(c.x, c.y + 10);
         }
         g.poly(deep);
-        g.fill({ color: 0x1a100c });
-        g.poly(mid);
-        g.fill({ color: 0x3a281c });
+        g.fill({ color: 0x142028, alpha: 0.9 });
       }
     },
     [board],
@@ -616,7 +708,7 @@ function IslandBase({ board }: { board: Board }) {
   return <pixiGraphics draw={draw} eventMode="none" />;
 }
 
-function IslandSeams({ board }: { board: Board }) {
+function CoastFoam({ board }: { board: Board }) {
   const draw = useCallback(
     (g: PixiGraphics) => {
       g.clear();
@@ -624,21 +716,10 @@ function IslandSeams({ board }: { board: Board }) {
         const a = vertexPos(board, edge.vertices[0]);
         const b = vertexPos(board, edge.vertices[1]);
         const lands = edge.hexes.filter((id) => board.hexes[id]).length;
-        if (lands === 2) {
-          g.moveTo(a.x, a.y);
-          g.lineTo(b.x, b.y);
-          g.stroke({ width: 6, color: 0x3d2a1f, alpha: 0.72 });
-          g.moveTo(a.x, a.y);
-          g.lineTo(b.x, b.y);
-          g.stroke({ width: 2, color: 0x6b4a32, alpha: 0.55 });
-        } else if (lands === 1) {
-          g.moveTo(a.x, a.y);
-          g.lineTo(b.x, b.y);
-          g.stroke({ width: 5, color: PALETTE.foam, alpha: 0.62 });
-          g.moveTo(a.x, a.y);
-          g.lineTo(b.x, b.y);
-          g.stroke({ width: 2, color: 0xf4e8c8, alpha: 0.4 });
-        }
+        if (lands !== 1) continue;
+        g.moveTo(a.x, a.y);
+        g.lineTo(b.x, b.y);
+        g.stroke({ width: 3, color: PALETTE.foam, alpha: 0.35 });
       }
     },
     [board],
@@ -665,7 +746,6 @@ function FallbackHex({ terrain }: { terrain: string }) {
       };
       g.poly(pts);
       g.fill({ color: colors[terrain] ?? 0x444444 });
-      g.stroke({ width: 2, color: PALETTE.night });
     },
     [terrain],
   );
@@ -687,9 +767,9 @@ function NumberToken({
 }) {
   const red = value === 6 || value === 8;
   return (
-    <pixiContainer x={x} y={y} eventMode="none" scale={hot ? 1.18 : 1}>
+    <pixiContainer x={x} y={y} eventMode="none" scale={hot ? 1.08 : 1}>
       {texture ? (
-        <pixiSprite texture={texture} anchor={0.5} scale={1.55} />
+        <pixiSprite texture={texture} anchor={0.5} scale={0.92} />
       ) : (
         <FallbackToken />
       )}
@@ -699,10 +779,10 @@ function NumberToken({
         y={1}
         style={{
           fontFamily: "Pixelify Sans, monospace",
-          fontSize: red ? 22 : 20,
+          fontSize: red ? 14 : 13,
           fill: red ? PALETTE.brick : PALETTE.night,
           fontWeight: "700",
-          stroke: { color: PALETTE.parchment, width: 4 },
+          stroke: { color: PALETTE.parchment, width: 3 },
         }}
       />
     </pixiContainer>
@@ -712,9 +792,9 @@ function NumberToken({
 function FallbackToken() {
   const draw = useCallback((g: PixiGraphics) => {
     g.clear();
-    g.circle(0, 0, 18);
+    g.circle(0, 0, 12);
     g.fill({ color: PALETTE.parchment });
-    g.stroke({ width: 3, color: PALETTE.goldDark });
+    g.stroke({ width: 2, color: PALETTE.goldDark });
   }, []);
   return <pixiGraphics draw={draw} />;
 }
@@ -740,11 +820,11 @@ function RoadGroove({
       g.clear();
       if (!built && ghost) {
         const s = Math.sin(t / 200);
-        g.roundRect(-L / 2, -6, L, 12, 3);
-        g.fill({ color: 0xf4e8c8, alpha: 0.35 + s * 0.12 });
-        g.roundRect(-L / 2 + 2, -4, L - 4, 8, 2);
-        g.fill({ color: PALETTE.gold, alpha: hovered ? 1 : 0.82 + s * 0.12 });
-        g.roundRect(-L / 2 + 6, -2, L - 12, 4, 1);
+        g.roundRect(-L / 2, -9, L, 18, 4);
+        g.fill({ color: 0xf4e8c8, alpha: 0.4 + s * 0.12 });
+        g.roundRect(-L / 2 + 1, -7, L - 2, 14, 3);
+        g.fill({ color: PALETTE.gold, alpha: hovered ? 1 : 0.88 + s * 0.1 });
+        g.roundRect(-L / 2 + 6, -3, L - 12, 6, 2);
         g.fill({ color: 0xffe27a, alpha: 0.95 });
         return;
       }
