@@ -20,8 +20,8 @@ import { phaseCopy } from "./copy.ts";
 
 extend({ Container, Graphics, Sprite, Text });
 
-const VERTEX_HIT = new Rectangle(-18, -24, 36, 42);
-const EDGE_HIT = new Rectangle(-30, -14, 60, 28);
+const VERTEX_HIT = new Rectangle(-22, -28, 44, 50);
+const EDGE_HIT = new Rectangle(-32, -16, 64, 32);
 const EDGE_LEN = HEX_SIZE;
 
 function vertexPos(board: Board, vid: string): { x: number; y: number } {
@@ -451,7 +451,7 @@ export function BoardView({
                       anchor={0.5}
                       width={EDGE_LEN + 6}
                       height={18}
-                      alpha={edge.road ? 1 : hovered ? 0.95 : 0.55}
+                      alpha={edge.road ? 1 : hovered ? 1 : 0.82}
                       eventMode="none"
                     />
                   ) : null}
@@ -486,15 +486,15 @@ export function BoardView({
                   onPointerOver={() => setHover({ kind: "vertex", id: v.id })}
                   onPointerOut={() => setHover((h) => (h?.id === v.id ? null : h))}
                 >
-                  {ghost && lantern ? (
-                    <pixiSprite texture={lantern} y={-18} anchor={0.5} alpha={0.95} eventMode="none" />
-                  ) : null}
                   {ghost ? <PulseDot /> : null}
+                  {ghost && lantern ? (
+                    <pixiSprite texture={lantern} y={-26} scale={1.7} anchor={0.5} alpha={1} eventMode="none" />
+                  ) : null}
                   {visible && tex ? (
                     <pixiSprite
                       texture={tex}
                       anchor={{ x: 0.5, y: 0.82 }}
-                      alpha={v.building ? 1 : hovered ? 0.95 : 0.55}
+                      alpha={v.building ? 1 : hovered ? 1 : 0.88}
                       eventMode="none"
                     />
                   ) : null}
@@ -647,12 +647,12 @@ function RoadGroove({ ghost, hovered, color }: { ghost: boolean; hovered: boolea
       const L = EDGE_LEN + 4;
       g.clear();
       g.roundRect(-L / 2, -7, L, 14, 3);
-      g.fill({ color: 0x23160f, alpha: ghost ? 0.4 : 0.92 });
+      g.fill({ color: 0x23160f, alpha: ghost ? 0.72 : 0.92 });
       g.roundRect(-L / 2 + 2, -5, L - 4, 10, 2);
-      g.fill({ color: 0x5a3d2a, alpha: ghost ? 0.55 : 1 });
+      g.fill({ color: 0x5a3d2a, alpha: ghost ? 0.85 : 1 });
       const stripe = FACTION_HEX[color] ?? 0xe8e0d0;
       g.roundRect(-L / 2 + 8, -2, L - 16, 4, 1);
-      g.fill({ color: stripe, alpha: ghost ? (hovered ? 0.8 : 0.45) : 1 });
+      g.fill({ color: stripe, alpha: ghost ? (hovered ? 1 : 0.8) : 1 });
     },
     [ghost, hovered, color],
   );
@@ -666,8 +666,10 @@ function PulseDot() {
     (g: PixiGraphics) => {
       const s = Math.sin(t / 220);
       g.clear();
-      g.circle(0, 2, 7 + s * 2);
-      g.stroke({ width: 2, color: PALETTE.gold, alpha: 0.55 + s * 0.3 });
+      g.circle(0, 2, 9 + s * 2);
+      g.fill({ color: PALETTE.gold, alpha: 0.22 + s * 0.12 });
+      g.circle(0, 2, 9 + s * 2);
+      g.stroke({ width: 2, color: PALETTE.gold, alpha: 0.85 + s * 0.15 });
     },
     [t],
   );
