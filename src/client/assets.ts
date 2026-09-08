@@ -1,8 +1,6 @@
 export const HEX_SIZE = 56;
 export const SPRITE_SIZE = 32;
 export const HEX_SPRITE_ANCHOR = { x: 0.5, y: 0.5 } as const;
-/** Slight overlap so sliced land tiles share a pixel and hide gaps. */
-export const HEX_DRAW_SCALE = 1.04;
 
 export const BEGINNER_AXIAL: Array<[number, number]> = [
   [0, -2],
@@ -95,6 +93,7 @@ export const BOARD_URLS = [
   ...Object.values(TERRAIN_SPRITE),
   ...BEGINNER_AXIAL.map(([q, r]) => landTileUrl(q, r)),
   "/sprites/hex-sea.png",
+  "/sprites/island.png",
   "/sprites/robber-0.png",
   "/sprites/robber-1.png",
   "/sprites/token.png",

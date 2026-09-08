@@ -8,23 +8,20 @@ import type { Action, Board, HexId, PublicView } from "../core/types.ts";
 import {
   BOARD_URLS,
   citySprite,
-  HEX_DRAW_SCALE,
   HEX_SIZE,
   HEX_SPRITE_ANCHOR,
   isBeginnerLayout,
   landTileUrl,
-  roadSprite,
   settlementSprite,
   TERRAIN_SPRITE,
 } from "./assets.ts";
 import { sfx } from "./audio.ts";
-import { PALETTE } from "./theme.ts";
+import { FACTION_HEX, PALETTE } from "./theme.ts";
 import { phaseCopy } from "./copy.ts";
 import { preloadSprites } from "./preload.ts";
 
 extend({ Container, Graphics, Sprite, Text });
 
-const EDGE_LEN = HEX_SIZE;
 const DRAG_SLOP = 10;
 const VERTEX_PICK = 30;
 const EDGE_PICK = 20;
@@ -38,6 +35,33 @@ function distToSegment(px: number, py: number, ax: number, ay: number, bx: numbe
   let t = ((px - ax) * dx + (py - ay) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function landPixelBounds(board: Board) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const hex of Object.values(board.hexes)) {
+    const p = pointyHexToPixel(hex, HEX_SIZE);
+    for (let i = 0; i < 6; i++) {
+      const c = hexCorner(p, HEX_SIZE, i);
+      minX = Math.min(minX, c.x);
+      minY = Math.min(minY, c.y);
+      maxX = Math.max(maxX, c.x);
+      maxY = Math.max(maxY, c.y);
+    }
+  }
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    cx: (minX + maxX) / 2,
+    cy: (minY + maxY) / 2,
+    w: maxX - minX,
+    h: maxY - minY,
+  };
 }
 
 function vertexPos(board: Board, vid: string): { x: number; y: number } {
@@ -457,36 +481,31 @@ export function BoardView({
               ) : null;
             })}
             <IslandBase board={view.board} />
+            {beginner && textures?.["/sprites/island.png"] ? (
+              <IslandArt board={view.board} texture={textures["/sprites/island.png"]!} />
+            ) : null}
             {landHexes.map((hex) => {
               const p = pointyHexToPixel(hex, HEX_SIZE);
+              const useIsland = Boolean(beginner && textures?.["/sprites/island.png"]);
               const slice = beginner ? landTileUrl(hex.q, hex.r) : TERRAIN_SPRITE[hex.terrain];
               const url = textures?.[slice] ? slice : TERRAIN_SPRITE[hex.terrain];
               const tex = url ? textures?.[url] : undefined;
               const canRob = robberTargets.has(hex.id);
               const lit = flash.has(hex.id);
               return (
-                <pixiContainer
-                  key={hex.id}
-                  x={p.x}
-                  y={p.y}
-                  eventMode="none"
-                >
-                  {tex ? (
-                    <pixiSprite
-                      texture={tex}
-                      anchor={HEX_SPRITE_ANCHOR}
-                      scale={HEX_DRAW_SCALE}
-                      eventMode="none"
-                    />
-                  ) : (
-                    <FallbackHex terrain={hex.terrain} />
-                  )}
+                <pixiContainer key={hex.id} x={p.x} y={p.y} eventMode="none">
+                  {!useIsland ? (
+                    tex ? (
+                      <pixiSprite texture={tex} anchor={HEX_SPRITE_ANCHOR} eventMode="none" />
+                    ) : (
+                      <FallbackHex terrain={hex.terrain} />
+                    )
+                  ) : null}
                   {lit ? <HarvestGlow /> : null}
                   {canRob ? <RobberTarget /> : null}
                 </pixiContainer>
               );
             })}
-            <CoastFoam board={view.board} />
             {landHexes.map((hex) => {
               if (hex.number === null) return null;
               const p = pointyHexToPixel(hex, HEX_SIZE);
@@ -537,8 +556,8 @@ export function BoardView({
               const hovered = hover?.kind === "edge" && hover.id === edge.id;
               const ghost = hot && !edge.road;
               const color = owner?.color ?? youColor;
-              const tex = textures?.[roadSprite(color)];
               const ang = Math.atan2(b.y - a.y, b.x - a.x);
+              const length = Math.hypot(b.x - a.x, b.y - a.y);
               return (
                 <pixiContainer
                   key={edge.id}
@@ -547,16 +566,12 @@ export function BoardView({
                   rotation={ang}
                   eventMode="none"
                 >
-                  {ghost ? <RoadGhost hovered={hovered} /> : null}
-                  {edge.road ? <RoadShadow /> : null}
-                  {edge.road && tex ? (
-                    <pixiSprite
-                      texture={tex}
-                      anchor={0.5}
-                      width={EDGE_LEN + 6}
-                      height={16}
-                      alpha={1}
-                      eventMode="none"
+                  {ghost || edge.road ? (
+                    <DirtTrack
+                      length={length}
+                      color={color}
+                      ghost={ghost}
+                      hovered={hovered}
                     />
                   ) : null}
                 </pixiContainer>
@@ -582,21 +597,22 @@ export function BoardView({
                   key={v.id}
                   x={p.x}
                   y={p.y}
-                  scale={hovered && ghost ? 1.12 : popScale}
+                  scale={hovered && ghost ? 1.06 : popScale * 0.82}
                   eventMode="none"
                 >
+                  {ghost || v.building ? <VertexPad /> : null}
                   {ghost ? <PulseDot /> : null}
                   {ghost && !hovered && ghostTex ? (
                     <pixiSprite
                       texture={ghostTex}
-                      anchor={{ x: 0.5, y: 0.82 }}
-                      scale={0.72}
+                      anchor={{ x: 0.5, y: 0.9 }}
+                      scale={0.7}
                       alpha={0.55}
                       eventMode="none"
                     />
                   ) : null}
                   {((ghost && hovered) || v.building) && tex ? (
-                    <pixiSprite texture={tex} anchor={{ x: 0.5, y: 0.82 }} eventMode="none" />
+                    <pixiSprite texture={tex} anchor={{ x: 0.5, y: 0.9 }} eventMode="none" />
                   ) : null}
                 </pixiContainer>
               );
@@ -688,43 +704,85 @@ function TableLoading({ progress }: { progress: number }) {
   );
 }
 
+function IslandArt({ board, texture }: { board: Board; texture: Texture }) {
+  const b = landPixelBounds(board);
+  return (
+    <pixiSprite
+      texture={texture}
+      x={b.cx}
+      y={b.cy}
+      width={b.w}
+      height={b.h}
+      anchor={0.5}
+      eventMode="none"
+    />
+  );
+}
+
 function IslandBase({ board }: { board: Board }) {
   const draw = useCallback(
     (g: PixiGraphics) => {
       g.clear();
-      for (const hex of Object.values(board.hexes)) {
-        const p = pointyHexToPixel(hex, HEX_SIZE);
-        const deep: number[] = [];
-        for (let i = 0; i < 6; i++) {
-          const c = hexCorner(p, HEX_SIZE + 8, i);
-          deep.push(c.x, c.y + 10);
-        }
-        g.poly(deep);
-        g.fill({ color: 0x142028, alpha: 0.9 });
-      }
+      const b = landPixelBounds(board);
+      g.ellipse(b.cx, b.cy + 10, b.w * 0.52, b.h * 0.48);
+      g.fill({ color: 0x0a141c, alpha: 0.55 });
     },
     [board],
   );
   return <pixiGraphics draw={draw} eventMode="none" />;
 }
 
-function CoastFoam({ board }: { board: Board }) {
+function VertexPad() {
+  const draw = useCallback((g: PixiGraphics) => {
+    g.clear();
+    g.ellipse(0, 4, 11, 7);
+    g.fill({ color: 0x3a2818, alpha: 0.72 });
+    g.ellipse(0, 3, 9, 5);
+    g.fill({ color: 0x7a5a38, alpha: 0.88 });
+    g.ellipse(0, 2, 6, 3);
+    g.fill({ color: 0xb08a58, alpha: 0.55 });
+  }, []);
+  return <pixiGraphics draw={draw} />;
+}
+
+function DirtTrack({
+  length,
+  color,
+  ghost,
+  hovered,
+}: {
+  length: number;
+  color: string;
+  ghost: boolean;
+  hovered: boolean;
+}) {
+  const [t, setT] = useState(0);
+  useTick(() => {
+    if (ghost) setT(performance.now());
+  });
   const draw = useCallback(
     (g: PixiGraphics) => {
+      const pad = 12;
+      const L = Math.max(8, length - pad * 2);
+      const pulse = ghost ? 0.12 * Math.sin(t / 220) : 0;
       g.clear();
-      for (const edge of Object.values(board.edges)) {
-        const a = vertexPos(board, edge.vertices[0]);
-        const b = vertexPos(board, edge.vertices[1]);
-        const lands = edge.hexes.filter((id) => board.hexes[id]).length;
-        if (lands !== 1) continue;
-        g.moveTo(a.x, a.y);
-        g.lineTo(b.x, b.y);
-        g.stroke({ width: 3, color: PALETTE.foam, alpha: 0.35 });
+      g.roundRect(-L / 2, -3, L, 6, 2);
+      g.fill({ color: 0x3d2a1c, alpha: ghost ? 0.4 + pulse : 0.9 });
+      g.roundRect(-L / 2 + 1, -2, L - 2, 4, 1);
+      g.fill({ color: 0x8a6840, alpha: ghost ? 0.38 + pulse : 0.92 });
+      g.roundRect(-L / 2 + 3, -1, L - 6, 2, 1);
+      g.fill({ color: ghost ? PALETTE.gold : 0xc4a56a, alpha: ghost ? (hovered ? 0.95 : 0.7 + pulse) : 0.7 });
+      if (!ghost) {
+        const mark = FACTION_HEX[color] ?? 0xe8e0d0;
+        g.circle(0, -5, 2.2);
+        g.fill({ color: mark });
+        g.circle(0, -7, 1.4);
+        g.fill({ color: PALETTE.gold });
       }
     },
-    [board],
+    [length, color, ghost, hovered, t],
   );
-  return <pixiGraphics draw={draw} eventMode="none" />;
+  return <pixiGraphics draw={draw} />;
 }
 
 function FallbackHex({ terrain }: { terrain: string }) {
@@ -769,7 +827,7 @@ function NumberToken({
   return (
     <pixiContainer x={x} y={y} eventMode="none" scale={hot ? 1.08 : 1}>
       {texture ? (
-        <pixiSprite texture={texture} anchor={0.5} scale={0.92} />
+        <pixiSprite texture={texture} anchor={0.5} scale={0.78} />
       ) : (
         <FallbackToken />
       )}
@@ -779,7 +837,7 @@ function NumberToken({
         y={1}
         style={{
           fontFamily: "Pixelify Sans, monospace",
-          fontSize: red ? 14 : 13,
+          fontSize: red ? 12 : 11,
           fill: red ? PALETTE.brick : PALETTE.night,
           fontWeight: "700",
           stroke: { color: PALETTE.parchment, width: 3 },
@@ -792,39 +850,9 @@ function NumberToken({
 function FallbackToken() {
   const draw = useCallback((g: PixiGraphics) => {
     g.clear();
-    g.circle(0, 0, 12);
+    g.circle(0, 0, 10);
     g.fill({ color: PALETTE.parchment });
     g.stroke({ width: 2, color: PALETTE.goldDark });
-  }, []);
-  return <pixiGraphics draw={draw} />;
-}
-
-function RoadGhost({ hovered }: { hovered: boolean }) {
-  const [t, setT] = useState(0);
-  useTick(() => setT(performance.now()));
-  const draw = useCallback(
-    (g: PixiGraphics) => {
-      const L = EDGE_LEN + 4;
-      const s = Math.sin(t / 220);
-      g.clear();
-      g.roundRect(-L / 2, -4, L, 8, 2);
-      g.fill({ color: 0x5a3d2a, alpha: 0.42 + s * 0.1 });
-      g.roundRect(-L / 2 + 2, -2, L - 4, 4, 1);
-      g.fill({ color: 0xc2a366, alpha: 0.5 + s * 0.08 });
-      g.roundRect(-L / 2 + 6, -1, L - 12, 2, 1);
-      g.fill({ color: PALETTE.gold, alpha: hovered ? 0.95 : 0.62 + s * 0.18 });
-    },
-    [hovered, t],
-  );
-  return <pixiGraphics draw={draw} />;
-}
-
-function RoadShadow() {
-  const draw = useCallback((g: PixiGraphics) => {
-    const L = EDGE_LEN + 6;
-    g.clear();
-    g.roundRect(-L / 2, -3, L, 8, 2);
-    g.fill({ color: 0x1a100c, alpha: 0.28 });
   }, []);
   return <pixiGraphics draw={draw} />;
 }
@@ -836,12 +864,10 @@ function PulseDot() {
     (g: PixiGraphics) => {
       const s = Math.sin(t / 220);
       g.clear();
-      g.circle(0, 1, 8 + s * 2);
-      g.fill({ color: PALETTE.gold, alpha: 0.35 + s * 0.18 });
-      g.circle(0, 1, 5);
+      g.circle(0, 2, 5 + s * 1.2);
+      g.fill({ color: PALETTE.gold, alpha: 0.28 + s * 0.14 });
+      g.circle(0, 2, 3);
       g.fill({ color: PALETTE.parchment });
-      g.circle(0, 1, 8 + s * 2);
-      g.stroke({ width: 2, color: PALETTE.gold, alpha: 1 });
     },
     [t],
   );

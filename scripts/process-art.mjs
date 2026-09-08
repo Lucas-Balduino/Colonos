@@ -326,7 +326,7 @@ function inPoly(x, y, pts) {
 }
 
 /** Clip to a pointy-top hex. No wooden rim — art runs to the shared edge. */
-function maskHexClip(png, size = HEX_SIZE + 0.55) {
+function maskHexClip(png, size = HEX_SIZE) {
   const cx = (png.width - 1) / 2;
   const cy = (png.height - 1) / 2;
   const outer = hexCorners(cx, cy, size);
@@ -605,7 +605,7 @@ function sliceIsland() {
   const oy = land.minY + land.h / 2 - ((game.minY + game.maxY) / 2) * s;
   const cx = (HEX_CANVAS_W - 1) / 2;
   const cy = (HEX_CANVAS_H - 1) / 2;
-  const poly = hexCorners(cx, cy, HEX_SIZE + 0.7);
+  const poly = hexCorners(cx, cy, HEX_SIZE);
   for (const [q, r] of BEGINNER_AXIAL) {
     const c = axialPixel(q, r);
     const canvas = blank(HEX_CANVAS_W, HEX_CANVAS_H);
@@ -624,9 +624,31 @@ function sliceIsland() {
     }
     writePng(`land_${q}_${r}.png`, canvas);
   }
-  const islandOut = scaleNN(png, 640, 640);
+  const islandOut = (() => {
+    const cropped = crop(png, land, 0);
+    const dw = Math.max(2, Math.round(game.w * 2));
+    const dh = Math.max(2, Math.round(game.h * 2));
+    return scaleNN(cropped, dw, dh);
+  })();
   writePng("island.png", islandOut);
-  console.log("sliced island", { land, scale: Number(s.toFixed(3)) });
+  writeFileSync(
+    join(outDir, "island-meta.json"),
+    JSON.stringify(
+      {
+        gameW: game.w,
+        gameH: game.h,
+        srcW: png.width,
+        srcH: png.height,
+        land,
+        scale: s,
+        ox,
+        oy,
+      },
+      null,
+      2,
+    ),
+  );
+  console.log("sliced island", { land, scale: Number(s.toFixed(3)), island: { w: islandOut.width, h: islandOut.height } });
 }
 
 function processSingle(srcName, destName, maxW, maxH) {
