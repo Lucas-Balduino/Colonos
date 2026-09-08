@@ -18,7 +18,7 @@ import {
   TERRAIN_SPRITE,
 } from "./assets.ts";
 import { sfx } from "./audio.ts";
-import { FACTION_HEX, PALETTE } from "./theme.ts";
+import { PALETTE } from "./theme.ts";
 import { phaseCopy } from "./copy.ts";
 import { preloadSprites } from "./preload.ts";
 
@@ -536,7 +536,6 @@ export function BoardView({
               const hot = roadTargets.has(edge.id);
               const hovered = hover?.kind === "edge" && hover.id === edge.id;
               const ghost = hot && !edge.road;
-              const show = Boolean(edge.road) || ghost;
               const color = owner?.color ?? youColor;
               const tex = textures?.[roadSprite(color)];
               const ang = Math.atan2(b.y - a.y, b.x - a.x);
@@ -548,12 +547,13 @@ export function BoardView({
                   rotation={ang}
                   eventMode="none"
                 >
-                  {show ? <RoadGroove ghost={ghost} hovered={hovered} color={color} built={Boolean(edge.road)} /> : null}
-                  {Boolean(edge.road) && tex ? (
+                  {ghost ? <RoadGhost hovered={hovered} /> : null}
+                  {edge.road ? <RoadShadow /> : null}
+                  {edge.road && tex ? (
                     <pixiSprite
                       texture={tex}
                       anchor={0.5}
-                      width={EDGE_LEN + 4}
+                      width={EDGE_LEN + 6}
                       height={16}
                       alpha={1}
                       eventMode="none"
@@ -648,7 +648,7 @@ function boardHint(
   if (robbers) return "Clique num terreno para pousar o ladrão.";
   if (settles) return "Os pontos dourados marcam onde fundar uma aldeia.";
   if (cities) return "Troque a aldeia por uma cidadela.";
-  if (roads) return "Toque nas tábuas douradas junto da aldeia para abrir a estrada.";
+  if (roads) return "Toque no caminho de terra dourado junto da aldeia.";
   return "Arraste o mapa. A roda do rato aproxima.";
 }
 
@@ -799,45 +799,33 @@ function FallbackToken() {
   return <pixiGraphics draw={draw} />;
 }
 
-function RoadGroove({
-  ghost,
-  hovered,
-  color,
-  built,
-}: {
-  ghost: boolean;
-  hovered: boolean;
-  color: string;
-  built: boolean;
-}) {
+function RoadGhost({ hovered }: { hovered: boolean }) {
   const [t, setT] = useState(0);
-  useTick(() => {
-    if (ghost) setT(performance.now());
-  });
+  useTick(() => setT(performance.now()));
   const draw = useCallback(
     (g: PixiGraphics) => {
-      const L = EDGE_LEN + 2;
+      const L = EDGE_LEN + 4;
+      const s = Math.sin(t / 220);
       g.clear();
-      if (!built && ghost) {
-        const s = Math.sin(t / 200);
-        g.roundRect(-L / 2, -9, L, 18, 4);
-        g.fill({ color: 0xf4e8c8, alpha: 0.4 + s * 0.12 });
-        g.roundRect(-L / 2 + 1, -7, L - 2, 14, 3);
-        g.fill({ color: PALETTE.gold, alpha: hovered ? 1 : 0.88 + s * 0.1 });
-        g.roundRect(-L / 2 + 6, -3, L - 12, 6, 2);
-        g.fill({ color: 0xffe27a, alpha: 0.95 });
-        return;
-      }
-      g.roundRect(-L / 2, -6, L, 12, 2);
-      g.fill({ color: 0x23160f, alpha: 0.95 });
-      g.roundRect(-L / 2 + 2, -4, L - 4, 8, 1);
-      g.fill({ color: 0x5a3d2a });
-      const stripe = FACTION_HEX[color] ?? 0xe8e0d0;
-      g.roundRect(-L / 2 + 8, -2, L - 16, 4, 1);
-      g.fill({ color: stripe });
+      g.roundRect(-L / 2, -4, L, 8, 2);
+      g.fill({ color: 0x5a3d2a, alpha: 0.42 + s * 0.1 });
+      g.roundRect(-L / 2 + 2, -2, L - 4, 4, 1);
+      g.fill({ color: 0xc2a366, alpha: 0.5 + s * 0.08 });
+      g.roundRect(-L / 2 + 6, -1, L - 12, 2, 1);
+      g.fill({ color: PALETTE.gold, alpha: hovered ? 0.95 : 0.62 + s * 0.18 });
     },
-    [ghost, hovered, color, built, t],
+    [hovered, t],
   );
+  return <pixiGraphics draw={draw} />;
+}
+
+function RoadShadow() {
+  const draw = useCallback((g: PixiGraphics) => {
+    const L = EDGE_LEN + 6;
+    g.clear();
+    g.roundRect(-L / 2, -3, L, 8, 2);
+    g.fill({ color: 0x1a100c, alpha: 0.28 });
+  }, []);
   return <pixiGraphics draw={draw} />;
 }
 

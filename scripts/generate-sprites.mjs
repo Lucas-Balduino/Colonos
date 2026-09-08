@@ -311,11 +311,18 @@ function city(id) {
 
 function road(id) {
   const f = FACTIONS[id];
-  const pix = new Pix(24, 8);
-  pix.fill(0, 2, 24, 4, f.body);
-  pix.fill(0, 1, 24, 1, f.roof);
-  pix.fill(0, 6, 24, 1, C.night);
-  for (let x = 2; x < 24; x += 5) pix.fill(x, 2, 1, 4, C.night);
+  const pix = new Pix(32, 12);
+  pix.fill(1, 4, 30, 5, C.wood);
+  pix.fill(2, 3, 28, 1, C.sand);
+  pix.fill(2, 9, 28, 1, C.night);
+  for (let x = 3; x < 29; x += 4) {
+    pix.fill(x, 4, 3, 5, C.sand);
+    pix.fill(x + 3, 4, 1, 5, C.wood);
+  }
+  pix.set(3, 2, f.roof);
+  pix.set(3, 1, C.gold);
+  pix.set(28, 2, f.roof);
+  pix.set(28, 1, C.gold);
   pix.save(`road-${id}.png`);
 }
 

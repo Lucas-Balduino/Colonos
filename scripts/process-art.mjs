@@ -70,6 +70,92 @@ function hueSat(r, g, b) {
   return { h, s, max, min };
 }
 
+function rgbToHsl(r, g, b) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0;
+  let s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return { h: h * 360, s, l };
+}
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = h / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hp < 1) [r, g, b] = [c, x, 0];
+  else if (hp < 2) [r, g, b] = [x, c, 0];
+  else if (hp < 3) [r, g, b] = [0, c, x];
+  else if (hp < 4) [r, g, b] = [0, x, c];
+  else if (hp < 5) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const m = l - c / 2;
+  return [
+    Math.round((r + m) * 255),
+    Math.round((g + m) * 255),
+    Math.round((b + m) * 255),
+  ];
+}
+
+function mixRgb(a, b, t) {
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * t),
+    Math.round(a[1] + (b[1] - a[1]) * t),
+    Math.round(a[2] + (b[2] - a[2]) * t),
+  ];
+}
+
+/** Keep the cottage/city silhouette; push red vs orange apart on roof + plaster. */
+function punchFactionColor(fileName, faction) {
+  const p = join(outDir, fileName);
+  if (!existsSync(p)) return;
+  const png = PNG.sync.read(readFileSync(p));
+  const roofHue = faction === "red" ? 4 : 38;
+  const wall = faction === "red" ? [198, 44, 42] : [242, 138, 22];
+  for (let i = 0; i < png.data.length; i += 4) {
+    if (png.data[i + 3] < 16) continue;
+    const r = png.data[i];
+    const g = png.data[i + 1];
+    const b = png.data[i + 2];
+    const { h, s, l } = rgbToHsl(r, g, b);
+    const goldWindow = h > 42 && h < 58 && s > 0.5 && l > 0.45 && b < 120;
+    const timber = l < 0.28 || (h > 18 && h < 42 && s > 0.18 && l < 0.38);
+    const stone = s < 0.16 && l > 0.22 && l < 0.58;
+    const smoke = l > 0.7 && s < 0.35;
+    if (goldWindow || timber || stone || smoke) continue;
+    const beigePlaster = l > 0.5 && h > 12 && h < 52 && b > 90;
+    const warmRoof = s > 0.28 && l < 0.64 && (h < 48 || h > 330) && !beigePlaster;
+    if (warmRoof) {
+      const [nr, ng, nb] = hslToRgb(roofHue, Math.min(0.92, s + 0.22), faction === "orange" ? Math.min(0.58, l + 0.05) : Math.max(0.28, l - 0.04));
+      png.data[i] = nr;
+      png.data[i + 1] = ng;
+      png.data[i + 2] = nb;
+      continue;
+    }
+    if (beigePlaster) {
+      const [nr, ng, nb] = mixRgb([r, g, b], wall, faction === "red" ? 0.62 : 0.7);
+      png.data[i] = nr;
+      png.data[i + 1] = ng;
+      png.data[i + 2] = nb;
+    }
+  }
+  writePng(fileName, png);
+}
+
 function isKeyed(r, g, b, a) {
   if (a < 10) return true;
   const { h, s, max } = hueSat(r, g, b);
@@ -627,19 +713,6 @@ processSheet(
   58,
   400,
 );
-if (existsSync(join(srcDir, "settlement-red-alpine.png"))) {
-  processSingle("settlement-red-alpine.png", "settlement-red.png", 42, 58);
-}
-if (existsSync(join(srcDir, "settlement-orange-round.png"))) {
-  processSingle("settlement-orange-round.png", "settlement-orange.png", 52, 50);
-}
-if (existsSync(join(srcDir, "city-red-keep.png"))) {
-  processSingle("city-red-keep.png", "city-red.png", 52, 66);
-}
-if (existsSync(join(srcDir, "city-orange-keep.png"))) {
-  processSingle("city-orange-keep.png", "city-orange.png", 56, 62);
-}
-
 processSheet("robber-hi.png", ["robber-0.png", "robber-1.png"], 36, 50, 300);
 processSheet(
   "dice-sheet.png",
@@ -651,6 +724,11 @@ processSheet(
 
 processSingle("token-hi.png", "token.png", 48, 48);
 processSingle("lantern-marker.png", "lantern.png", 18, 28);
+
+punchFactionColor("settlement-red.png", "red");
+punchFactionColor("settlement-orange.png", "orange");
+punchFactionColor("city-red.png", "red");
+punchFactionColor("city-orange.png", "orange");
 
 function sliceSheet(srcName, destNames, maxW, maxH) {
   const p = join(srcDir, srcName);
@@ -721,7 +799,7 @@ const roads = [
   ["road-orange-tile.png", "road-orange.png"],
   ["road-ivory-tile.png", "road-ivory.png"],
 ];
-for (const [src, dest] of roads) processSingle(src, dest, 64, 28);
+for (const [src, dest] of roads) processSingle(src, dest, 96, 32);
 
 function processCardSheet(srcName, destNames) {
   const p = join(srcDir, srcName);
