@@ -22,6 +22,8 @@ const FACE_H = HEX_SIZE * 2;
 const HEX_CANVAS_W = HEX_W;
 const HEX_CANVAS_H = FACE_H;
 const HEX_ANCHOR_Y = 0.5;
+/** Slightly past HEX_SIZE so the six vertex pixels stay opaque and tiles overlap 1px. */
+const HEX_CLIP = HEX_SIZE + 0.65;
 
 const tmpDir = "/tmp/colonos-art";
 mkdirSync(tmpDir, { recursive: true });
@@ -325,10 +327,10 @@ function inPoly(x, y, pts) {
   return inside;
 }
 
-/** Clip to a pointy-top hex. No wooden rim — art runs to the shared edge. */
-function maskHexClip(png, size = HEX_SIZE) {
-  const cx = (png.width - 1) / 2;
-  const cy = (png.height - 1) / 2;
+/** Clip to a pointy-top hex aligned with Pixi anchor 0.5 / game HEX_SIZE. */
+function maskHexClip(png, size = HEX_CLIP) {
+  const cx = png.width / 2;
+  const cy = png.height / 2;
   const outer = hexCorners(cx, cy, size);
   for (let y = 0; y < png.height; y++) {
     for (let x = 0; x < png.width; x++) {
@@ -338,47 +340,75 @@ function maskHexClip(png, size = HEX_SIZE) {
         png.data[i + 1] = 0;
         png.data[i + 2] = 0;
         png.data[i + 3] = 0;
-      } else if (png.data[i + 3] < 18) {
-        png.data[i + 3] = 255;
       }
     }
   }
 }
 
-function isSeaColor(r, g, b) {
-  const { h, s } = hueSat(r, g, b);
-  if (h > 185 && h < 255 && s > 0.22 && b > 38 && r < 110) return true;
-  if (b > r + 22 && b > g + 8 && r < 95 && b > 45) return true;
-  return false;
-}
-
-function landBBox(png) {
-  let minX = png.width;
-  let minY = png.height;
-  let maxX = 0;
-  let maxY = 0;
-  let count = 0;
-  for (let y = 0; y < png.height; y++) {
-    for (let x = 0; x < png.width; x++) {
-      const i = (y * png.width + x) * 4;
-      if (png.data[i + 3] < 12) continue;
-      if (isSeaColor(png.data[i], png.data[i + 1], png.data[i + 2])) continue;
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-      count += 1;
+/** Paint holes inside the hex from neighbouring opaque pixels so seams stay solid. */
+function fillHexInterior(png, fallback = [109, 179, 92]) {
+  const cx = png.width / 2;
+  const cy = png.height / 2;
+  const outer = hexCorners(cx, cy, HEX_CLIP);
+  const w = png.width;
+  const h = png.height;
+  const inside = (x, y) => inPoly(x + 0.5, y + 0.5, outer);
+  const queue = [];
+  const seen = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!inside(x, y)) continue;
+      const i = (y * w + x) * 4;
+      if (png.data[i + 3] < 18) continue;
+      const idx = y * w + x;
+      seen[idx] = 1;
+      queue.push(idx);
     }
   }
-  if (!count) return null;
-  return { minX, minY, maxX, maxY, w: maxX - minX + 1, h: maxY - minY + 1, count };
-}
-
-function samplePng(png, fx, fy) {
-  const x = Math.max(0, Math.min(png.width - 1, Math.round(fx)));
-  const y = Math.max(0, Math.min(png.height - 1, Math.round(fy)));
-  const i = (y * png.width + x) * 4;
-  return [png.data[i], png.data[i + 1], png.data[i + 2], png.data[i + 3]];
+  const dirs = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+  let qi = 0;
+  while (qi < queue.length) {
+    const idx = queue[qi++];
+    const x = idx % w;
+    const y = (idx / w) | 0;
+    const si = idx * 4;
+    for (const [dx, dy] of dirs) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      if (!inside(nx, ny)) continue;
+      const nidx = ny * w + nx;
+      if (seen[nidx]) continue;
+      const ni = nidx * 4;
+      if (png.data[ni + 3] >= 18) {
+        seen[nidx] = 1;
+        queue.push(nidx);
+        continue;
+      }
+      png.data[ni] = png.data[si];
+      png.data[ni + 1] = png.data[si + 1];
+      png.data[ni + 2] = png.data[si + 2];
+      png.data[ni + 3] = 255;
+      seen[nidx] = 1;
+      queue.push(nidx);
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!inside(x, y)) continue;
+      const i = (y * w + x) * 4;
+      if (png.data[i + 3] >= 18) continue;
+      png.data[i] = fallback[0];
+      png.data[i + 1] = fallback[1];
+      png.data[i + 2] = fallback[2];
+      png.data[i + 3] = 255;
+    }
+  }
 }
 
 function makeChipFromHex(canvas, destName) {
@@ -402,58 +432,6 @@ function makeChipFromHex(canvas, destName) {
     }
   }
   writePng(destName.replace("hex-", "chip-"), chip);
-}
-
-const BEGINNER_AXIAL = [
-  [0, -2],
-  [1, -2],
-  [2, -2],
-  [-1, -1],
-  [0, -1],
-  [1, -1],
-  [2, -1],
-  [-2, 0],
-  [-1, 0],
-  [0, 0],
-  [1, 0],
-  [2, 0],
-  [-2, 1],
-  [-1, 1],
-  [0, 1],
-  [1, 1],
-  [-2, 2],
-  [-1, 2],
-  [0, 2],
-];
-
-function axialPixel(q, r, size = HEX_SIZE) {
-  return {
-    x: size * Math.sqrt(3) * (q + r / 2),
-    y: size * 1.5 * r,
-  };
-}
-
-function gameLandBounds() {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const [q, r] of BEGINNER_AXIAL) {
-    const c = axialPixel(q, r);
-    for (let i = 0; i < 6; i++) {
-      const p = hexCorners(c.x, c.y, HEX_SIZE)[i];
-      minX = Math.min(minX, p[0]);
-      minY = Math.min(minY, p[1]);
-      maxX = Math.max(maxX, p[0]);
-      maxY = Math.max(maxY, p[1]);
-    }
-  }
-  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
-}
-
-function fitWidth(src, targetW) {
-  const dh = Math.max(1, Math.round((src.height * targetW) / src.width));
-  return scaleNN(src, targetW, dh);
 }
 
 function fitMax(src, maxW, maxH) {
@@ -548,7 +526,90 @@ function keyDarkBackdrop(png) {
   }
 }
 
-function processFieldHex(srcName, destName) {
+function distToSeg(px, py, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 0.001) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+const CONNECTOR_EARTH = [194, 163, 102];
+const CONNECTOR_EARTH_DK = [138, 104, 64];
+const CONNECTOR_MEADOW = [109, 179, 92];
+
+/** Shared edge meadow + corner house-plots so every land hex snaps to its neighbors. */
+function paintConnectors(png) {
+  const cx = png.width / 2;
+  const cy = png.height / 2;
+  const corners = hexCorners(cx, cy, HEX_SIZE);
+  const CORNER_R = 13;
+  const EDGE_BAND = 7.5;
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const i = (y * png.width + x) * 4;
+      if (png.data[i + 3] < 18) continue;
+      const px = x + 0.5;
+      const py = y + 0.5;
+      let cornerD = Infinity;
+      for (const [qx, qy] of corners) {
+        cornerD = Math.min(cornerD, Math.hypot(px - qx, py - qy));
+      }
+      let edgeD = Infinity;
+      for (let k = 0; k < 6; k++) {
+        const a = corners[k];
+        const b = corners[(k + 1) % 6];
+        edgeD = Math.min(edgeD, distToSeg(px, py, a[0], a[1], b[0], b[1]));
+      }
+      const r = png.data[i];
+      const g = png.data[i + 1];
+      const b = png.data[i + 2];
+      if (cornerD < CORNER_R) {
+        const t = Math.pow(1 - cornerD / CORNER_R, 1.05) * (cornerD < 4.5 ? 1 : 0.92);
+        const earth = cornerD < 5.5 ? CONNECTOR_EARTH : CONNECTOR_EARTH_DK;
+        png.data[i] = Math.round(r + (earth[0] - r) * t);
+        png.data[i + 1] = Math.round(g + (earth[1] - g) * t);
+        png.data[i + 2] = Math.round(b + (earth[2] - b) * t);
+        continue;
+      }
+      if (edgeD < EDGE_BAND) {
+        const t = Math.pow(1 - edgeD / EDGE_BAND, 0.7) * (edgeD < 2.4 ? 1 : 0.78);
+        png.data[i] = Math.round(r + (CONNECTOR_MEADOW[0] - r) * t);
+        png.data[i + 1] = Math.round(g + (CONNECTOR_MEADOW[1] - g) * t);
+        png.data[i + 2] = Math.round(b + (CONNECTOR_MEADOW[2] - b) * t);
+      }
+    }
+  }
+}
+
+function finishLandHex(canvas, destName, sea) {
+  maskHexClip(canvas);
+  fillHexInterior(canvas, sea ? [22, 52, 74] : CONNECTOR_MEADOW);
+  if (!sea) paintConnectors(canvas);
+  writePng(destName, canvas);
+  makeChipFromHex(canvas, destName);
+}
+
+function processKeyedHex(srcName, destName, sea = false) {
+  const p = join(srcDir, srcName);
+  if (!existsSync(p)) return false;
+  const png = loadKeyed(srcName);
+  const box = bboxOf(png);
+  if (!box) throw new Error(`empty hex ${srcName}`);
+  const cropped = crop(png, box, 0);
+  const scale = Math.max(HEX_W / cropped.width, FACE_H / cropped.height);
+  const dw = Math.max(1, Math.round(cropped.width * scale));
+  const dh = Math.max(1, Math.round(cropped.height * scale));
+  const scaled = scaleNN(cropped, dw, dh);
+  const canvas = blank(HEX_CANVAS_W, HEX_CANVAS_H);
+  blit(canvas, scaled, Math.round((HEX_CANVAS_W - dw) / 2), Math.round((HEX_CANVAS_H - dh) / 2));
+  finishLandHex(canvas, destName, sea);
+  return true;
+}
+
+function processFieldHex(srcName, destName, sea = false) {
   const p = join(srcDir, srcName);
   if (!existsSync(p)) return false;
   const png = readPng(p);
@@ -563,92 +624,28 @@ function processFieldHex(srcName, destName) {
     maxY: Math.min(png.height - 1, sy + sampleH - 1),
   }, 0);
   const scaled = scaleNN(sample, HEX_CANVAS_W, HEX_CANVAS_H);
-  maskHexClip(scaled);
-  writePng(destName, scaled);
-  makeChipFromHex(scaled, destName);
+  finishLandHex(scaled, destName, sea);
   return true;
 }
 
 function processHex(srcName, destName) {
-  if (processFieldHex(srcName.replace("hex-", "field-").replace("-tile.png", ".png"), destName)) {
+  const sea = destName.includes("sea");
+  const connectName = destName.replace(".png", "-connect.png");
+  if (processKeyedHex(connectName, destName, sea)) return;
+  if (processFieldHex(srcName.replace("hex-", "field-").replace("-tile.png", ".png"), destName, sea)) {
     return;
   }
   const png = loadKeyed(srcName);
   const box = bboxOf(png);
   if (!box) throw new Error(`empty hex ${srcName}`);
   const cropped = crop(png, box, 0);
-  const scale = Math.max(HEX_W / cropped.width, FACE_H / cropped.height) * 1.04;
+  const scale = Math.max(HEX_W / cropped.width, FACE_H / cropped.height);
   const dw = Math.max(1, Math.round(cropped.width * scale));
   const dh = Math.max(1, Math.round(cropped.height * scale));
   const scaled = scaleNN(cropped, dw, dh);
   const canvas = blank(HEX_CANVAS_W, HEX_CANVAS_H);
-  blit(canvas, scaled, Math.floor((HEX_CANVAS_W - dw) / 2), Math.floor((HEX_CANVAS_H - dh) / 2));
-  maskHexClip(canvas);
-  writePng(destName, canvas);
-  makeChipFromHex(canvas, destName);
-}
-
-function sliceIsland() {
-  const p = join(srcDir, "island-beginner.png");
-  if (!existsSync(p)) {
-    console.warn("no island-beginner.png, skipping unique land slices");
-    return;
-  }
-  const png = readPng(p);
-  const land = landBBox(png);
-  if (!land) throw new Error("island has no land");
-  const game = gameLandBounds();
-  const sx = land.w / game.w;
-  const sy = land.h / game.h;
-  const s = (sx + sy) / 2;
-  const ox = land.minX + land.w / 2 - ((game.minX + game.maxX) / 2) * s;
-  const oy = land.minY + land.h / 2 - ((game.minY + game.maxY) / 2) * s;
-  const cx = (HEX_CANVAS_W - 1) / 2;
-  const cy = (HEX_CANVAS_H - 1) / 2;
-  const poly = hexCorners(cx, cy, HEX_SIZE);
-  for (const [q, r] of BEGINNER_AXIAL) {
-    const c = axialPixel(q, r);
-    const canvas = blank(HEX_CANVAS_W, HEX_CANVAS_H);
-    for (let y = 0; y < HEX_CANVAS_H; y++) {
-      for (let x = 0; x < HEX_CANVAS_W; x++) {
-        if (!inPoly(x + 0.5, y + 0.5, poly)) continue;
-        const wx = c.x + (x - cx);
-        const wy = c.y + (y - cy);
-        const [cr, cg, cb, ca] = samplePng(png, ox + wx * s, oy + wy * s);
-        const i = (y * HEX_CANVAS_W + x) * 4;
-        canvas.data[i] = cr;
-        canvas.data[i + 1] = cg;
-        canvas.data[i + 2] = cb;
-        canvas.data[i + 3] = ca < 12 ? 255 : ca;
-      }
-    }
-    writePng(`land_${q}_${r}.png`, canvas);
-  }
-  const islandOut = (() => {
-    const cropped = crop(png, land, 0);
-    const dw = Math.max(2, Math.round(game.w * 2));
-    const dh = Math.max(2, Math.round(game.h * 2));
-    return scaleNN(cropped, dw, dh);
-  })();
-  writePng("island.png", islandOut);
-  writeFileSync(
-    join(outDir, "island-meta.json"),
-    JSON.stringify(
-      {
-        gameW: game.w,
-        gameH: game.h,
-        srcW: png.width,
-        srcH: png.height,
-        land,
-        scale: s,
-        ox,
-        oy,
-      },
-      null,
-      2,
-    ),
-  );
-  console.log("sliced island", { land, scale: Number(s.toFixed(3)), island: { w: islandOut.width, h: islandOut.height } });
+  blit(canvas, scaled, Math.round((HEX_CANVAS_W - dw) / 2), Math.round((HEX_CANVAS_H - dh) / 2));
+  finishLandHex(canvas, destName, sea);
 }
 
 function processSingle(srcName, destName, maxW, maxH) {
@@ -719,7 +716,6 @@ const hexes = [
   ["hex-sea-tile.png", "hex-sea.png"],
 ];
 for (const [src, dest] of hexes) processHex(src, dest);
-sliceIsland();
 
 processSheet(
   "settlements-hi.png",

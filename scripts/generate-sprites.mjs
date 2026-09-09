@@ -98,39 +98,112 @@ function hash(x, y, s = 0) {
   return ((x * 374761393 + y * 668265263 + s * 1274126177) >>> 0) % 100;
 }
 
-function inPointyHex(x, y, cx, cy, size) {
-  const dx = x - cx + 0.5;
-  const dy = y - cy + 0.5;
-  const q = ((Math.sqrt(3) / 3) * dx - (1 / 3) * dy) / size;
-  const r = ((2 / 3) * dy) / size;
-  const s = -q - r;
-  return Math.max(Math.abs(q), Math.abs(r), Math.abs(s)) <= 1;
+const HEX_SIZE = 56;
+const HEX_W = Math.round(Math.sqrt(3) * HEX_SIZE);
+const FACE_H = HEX_SIZE * 2;
+const HEX_CLIP = HEX_SIZE + 0.65;
+
+function inPoly(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i][0];
+    const yi = pts[i][1];
+    const xj = pts[j][0];
+    const yj = pts[j][1];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi + 0.0001) + xi) inside = !inside;
+  }
+  return inside;
 }
 
-function paintHex(pix, painter) {
-  const cx = (pix.w - 1) / 2;
-  const cy = (pix.h - 1) / 2;
-  const size = pix.h / 2 - 1;
+function hexCorners(cx, cy, size) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = ((60 * i - 30) * Math.PI) / 180;
+    pts.push([cx + size * Math.cos(a), cy + size * Math.sin(a)]);
+  }
+  return pts;
+}
+
+function distToSeg(px, py, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 0.001) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function inPointyHex(x, y, cx, cy, size) {
+  return inPoly(x + 0.5, y + 0.5, hexCorners(cx, cy, size));
+}
+
+function paintConnectors(pix) {
+  const cx = pix.w / 2;
+  const cy = pix.h / 2;
+  const corners = hexCorners(cx, cy, HEX_SIZE);
+  const CORNER_R = 13;
+  const EDGE_BAND = 7.5;
   for (let y = 0; y < pix.h; y++) {
     for (let x = 0; x < pix.w; x++) {
-      const inner = inPointyHex(x, y, cx, cy, size - 1.2);
-      const rim = inPointyHex(x, y, cx, cy, size) && !inPointyHex(x, y, cx, cy, size - 1.2);
-      if (rim) pix.set(x, y, C.night);
-      else if (inner) painter(x, y, cx, cy);
+      const i = (y * pix.w + x) * 4;
+      if (pix.data[i + 3] < 18) continue;
+      const px = x + 0.5;
+      const py = y + 0.5;
+      let cornerD = Infinity;
+      for (const [qx, qy] of corners) {
+        cornerD = Math.min(cornerD, Math.hypot(px - qx, py - qy));
+      }
+      let edgeD = Infinity;
+      for (let k = 0; k < 6; k++) {
+        const a = corners[k];
+        const b = corners[(k + 1) % 6];
+        edgeD = Math.min(edgeD, distToSeg(px, py, a[0], a[1], b[0], b[1]));
+      }
+      const r = pix.data[i];
+      const g = pix.data[i + 1];
+      const b = pix.data[i + 2];
+      const set = (col, t) => {
+        pix.set(x, y, [
+          Math.round(r + (col[0] - r) * t),
+          Math.round(g + (col[1] - g) * t),
+          Math.round(b + (col[2] - b) * t),
+        ]);
+      };
+      if (cornerD < CORNER_R) {
+        const t = Math.pow(1 - cornerD / CORNER_R, 1.05) * (cornerD < 4.5 ? 1 : 0.92);
+        set(cornerD < 5.5 ? C.sand : C.wood, t);
+        continue;
+      }
+      if (edgeD < EDGE_BAND) {
+        const t = Math.pow(1 - edgeD / EDGE_BAND, 0.7) * (edgeD < 2.4 ? 1 : 0.78);
+        set(C.pasture, t);
+      }
     }
   }
 }
 
+function paintHex(pix, painter, sea = false) {
+  const cx = pix.w / 2;
+  const cy = pix.h / 2;
+  for (let y = 0; y < pix.h; y++) {
+    for (let x = 0; x < pix.w; x++) {
+      if (inPointyHex(x, y, cx, cy, HEX_CLIP)) painter(x, y, cx, cy);
+    }
+  }
+  if (!sea) paintConnectors(pix);
+}
+
 function hexWood() {
-  const pix = new Pix(84, 96);
+  const pix = new Pix(HEX_W, FACE_H);
   paintHex(pix, (x, y, cx, cy) => {
     pix.set(x, y, hash(x, y) < 18 ? C.wood : C.forest);
     if ((x + y * 2) % 7 === 0 && hash(x, y, 3) < 40) pix.set(x, y, C.pasture);
   });
   for (let i = 0; i < 14; i++) {
-    const tx = 18 + (i % 5) * 12 + (i > 9 ? 6 : 0);
-    const ty = 22 + Math.floor(i / 5) * 18;
-    pine(pix, tx, ty);
+    const tx = 22 + (i % 5) * 14 + (i > 9 ? 6 : 0);
+    const ty = 28 + Math.floor(i / 5) * 20;
+    if (Math.hypot(tx - HEX_W / 2, ty - FACE_H / 2) < 32) pine(pix, tx, ty);
   }
   pix.save("hex-wood.png");
 }
@@ -162,7 +235,7 @@ function pine(pix, x, y) {
 }
 
 function hexBrick() {
-  const pix = new Pix(84, 96);
+  const pix = new Pix(HEX_W, FACE_H);
   paintHex(pix, (x, y) => {
     const band = Math.floor(y / 4) % 2;
     const brickW = 7;
@@ -174,16 +247,16 @@ function hexBrick() {
 }
 
 function hexSheep() {
-  const pix = new Pix(84, 96);
+  const pix = new Pix(HEX_W, FACE_H);
   paintHex(pix, (x, y) => {
     pix.set(x, y, hash(x, y) < 22 ? C.forest : C.pasture);
   });
   for (const [sx, sy] of [
-    [28, 40],
-    [48, 36],
-    [38, 56],
-    [56, 54],
-    [24, 58],
+    [32, 46],
+    [54, 42],
+    [44, 64],
+    [62, 62],
+    [28, 66],
   ])
     sheep(pix, sx, sy);
   pix.save("hex-sheep.png");
@@ -197,7 +270,7 @@ function sheep(pix, x, y) {
 }
 
 function hexWheat() {
-  const pix = new Pix(84, 96);
+  const pix = new Pix(HEX_W, FACE_H);
   paintHex(pix, (x, y) => {
     const row = (x + Math.floor(y / 3)) % 3;
     pix.set(x, y, row === 0 ? C.goldDark : row === 1 ? C.wheat : C.gold);
@@ -206,11 +279,11 @@ function hexWheat() {
 }
 
 function hexOre() {
-  const pix = new Pix(84, 96);
+  const pix = new Pix(HEX_W, FACE_H);
   paintHex(pix, (x, y, cx, cy) => {
     const d = Math.abs(x - cx) + Math.abs(y - cy) * 0.7;
-    if (d < 10) pix.set(x, y, C.foam);
-    else if (d < 18) pix.set(x, y, C.stone);
+    if (d < 12) pix.set(x, y, C.foam);
+    else if (d < 22) pix.set(x, y, C.stone);
     else pix.set(x, y, hash(x, y) < 20 ? C.panel : C.stone);
     if (hash(x, y, 9) < 6) pix.set(x, y, C.night);
   });
@@ -218,12 +291,12 @@ function hexOre() {
 }
 
 function hexDesert() {
-  const pix = new Pix(84, 96);
+  const pix = new Pix(HEX_W, FACE_H);
   paintHex(pix, (x, y) => {
     const dune = Math.sin(x * 0.3 + y * 0.08);
     pix.set(x, y, dune > 0.4 ? C.parchment : dune < -0.3 ? C.goldDark : C.sand);
   });
-  cactus(pix, 40, 48);
+  cactus(pix, 46, 56);
   pix.save("hex-desert.png");
 }
 
@@ -235,10 +308,14 @@ function cactus(pix, x, y) {
 }
 
 function hexSea() {
-  const pix = new Pix(84, 96);
-  paintHex(pix, (x, y) => {
-    pix.set(x, y, hash(x, y, y) < 8 ? C.foam : hash(x + y, 2) < 18 ? C.panel : C.sea);
-  });
+  const pix = new Pix(HEX_W, FACE_H);
+  paintHex(
+    pix,
+    (x, y) => {
+      pix.set(x, y, hash(x, y, y) < 8 ? C.foam : hash(x + y, 2) < 18 ? C.panel : C.sea);
+    },
+    true,
+  );
   pix.save("hex-sea.png");
 }
 

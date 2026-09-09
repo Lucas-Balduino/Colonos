@@ -2,7 +2,7 @@
 
 Fan game educacional em pixel art com as **regras base de Catan**: tabuleiro hexagonal modular, dados, recursos, estradas/aldeias/cidades, ladrão, cartas de desenvolvimento e pontuação até 10 VP.
 
-Identidade visual: paleta de madeira e ouro velho, ilha 16-bit contínua (um mapa só sob o grid, sem moldura entre terrenos). Casas e caminhos assentam em clareiras de terra. HUD em bandeja de madeira. O motor em `src/core` é puro.
+Identidade visual: paleta de madeira e ouro velho, tiles hexagonais 16-bit com a mesma linguagem de borda (prado) e de canto (clareira de terra), para o mapa parecer um mundo só. Casas assentam nas clareiras. HUD em bandeja de madeira. O motor em `src/core` é puro.
 
 - **Solo**: você contra 3 bots heurísticos
 - **Hot-seat**: 3–4 humanos no mesmo navegador

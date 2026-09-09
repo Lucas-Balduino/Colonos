@@ -3,15 +3,13 @@ import { Application, extend, useTick } from "@pixi/react";
 import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import type { Graphics as PixiGraphics } from "pixi.js";
 import { toast } from "sonner";
-import { cubeDistance, hexCorner, hexId, parseHexId, pointyHexToPixel } from "../core/hex.ts";
+import { addAxial, cubeDistance, HEX_DIRS, hexCorner, hexId, parseHexId, pointyHexToPixel } from "../core/hex.ts";
 import type { Action, Board, HexId, PublicView } from "../core/types.ts";
 import {
   BOARD_URLS,
   citySprite,
   HEX_SIZE,
   HEX_SPRITE_ANCHOR,
-  isBeginnerLayout,
-  landTileUrl,
   settlementSprite,
   TERRAIN_SPRITE,
 } from "./assets.ts";
@@ -35,33 +33,6 @@ function distToSegment(px: number, py: number, ax: number, ay: number, bx: numbe
   let t = ((px - ax) * dx + (py - ay) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-}
-
-function landPixelBounds(board: Board) {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const hex of Object.values(board.hexes)) {
-    const p = pointyHexToPixel(hex, HEX_SIZE);
-    for (let i = 0; i < 6; i++) {
-      const c = hexCorner(p, HEX_SIZE, i);
-      minX = Math.min(minX, c.x);
-      minY = Math.min(minY, c.y);
-      maxX = Math.max(maxX, c.x);
-      maxY = Math.max(maxY, c.y);
-    }
-  }
-  return {
-    minX,
-    minY,
-    maxX,
-    maxY,
-    cx: (minX + maxX) / 2,
-    cy: (minY + maxY) / 2,
-    w: maxX - minX,
-    h: maxY - minY,
-  };
 }
 
 function vertexPos(board: Board, vid: string): { x: number; y: number } {
@@ -439,7 +410,6 @@ export function BoardView({
   const robberPixel = robberHex ? pointyHexToPixel(robberHex, HEX_SIZE) : { x: 0, y: 0 };
   const yourTurn = Boolean(you && you === view.currentPlayerId);
   const hint = boardHint(view, settleTargets.size, cityTargets.size, roadTargets.size, robberTargets.size);
-  const beginner = isBeginnerLayout(view.board.hexes);
   const canClick = Boolean(
     hover &&
       ((hover.kind === "vertex" && (settleTargets.has(hover.id) || cityTargets.has(hover.id))) ||
@@ -481,31 +451,25 @@ export function BoardView({
               ) : null;
             })}
             <IslandBase board={view.board} />
-            {beginner && textures?.["/sprites/island.png"] ? (
-              <IslandArt board={view.board} texture={textures["/sprites/island.png"]!} />
-            ) : null}
             {landHexes.map((hex) => {
               const p = pointyHexToPixel(hex, HEX_SIZE);
-              const useIsland = Boolean(beginner && textures?.["/sprites/island.png"]);
-              const slice = beginner ? landTileUrl(hex.q, hex.r) : TERRAIN_SPRITE[hex.terrain];
-              const url = textures?.[slice] ? slice : TERRAIN_SPRITE[hex.terrain];
+              const url = TERRAIN_SPRITE[hex.terrain];
               const tex = url ? textures?.[url] : undefined;
               const canRob = robberTargets.has(hex.id);
               const lit = flash.has(hex.id);
               return (
                 <pixiContainer key={hex.id} x={p.x} y={p.y} eventMode="none">
-                  {!useIsland ? (
-                    tex ? (
-                      <pixiSprite texture={tex} anchor={HEX_SPRITE_ANCHOR} eventMode="none" />
-                    ) : (
-                      <FallbackHex terrain={hex.terrain} />
-                    )
-                  ) : null}
+                  {tex ? (
+                    <pixiSprite texture={tex} anchor={HEX_SPRITE_ANCHOR} eventMode="none" />
+                  ) : (
+                    <FallbackHex terrain={hex.terrain} />
+                  )}
                   {lit ? <HarvestGlow /> : null}
                   {canRob ? <RobberTarget /> : null}
                 </pixiContainer>
               );
             })}
+            <CoastFoam board={view.board} />
             {landHexes.map((hex) => {
               if (hex.number === null) return null;
               const p = pointyHexToPixel(hex, HEX_SIZE);
@@ -694,7 +658,7 @@ function TableLoading({ progress }: { progress: number }) {
       <div className="relative wood-panel max-w-sm p-5 text-center">
         <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Ilha das Lanternas</p>
         <h2 className="mt-1 text-2xl">Preparando a mesa</h2>
-        <p className="text-muted-foreground mt-2 text-sm">As lanternas acendem. Os terrenos encaixam na ilha.</p>
+        <p className="text-muted-foreground mt-2 text-sm">As lanternas acendem. Os terrenos encaixam uns nos outros.</p>
         <div className="mt-4 h-3 w-full border-2 border-[#8a6410] bg-[#1a1520]">
           <div className="h-full bg-[#d4a017]" style={{ width: `${pct}%` }} />
         </div>
@@ -704,28 +668,51 @@ function TableLoading({ progress }: { progress: number }) {
   );
 }
 
-function IslandArt({ board, texture }: { board: Board; texture: Texture }) {
-  const b = landPixelBounds(board);
-  return (
-    <pixiSprite
-      texture={texture}
-      x={b.cx}
-      y={b.cy}
-      width={b.w}
-      height={b.h}
-      anchor={0.5}
-      eventMode="none"
-    />
-  );
-}
-
 function IslandBase({ board }: { board: Board }) {
   const draw = useCallback(
     (g: PixiGraphics) => {
       g.clear();
-      const b = landPixelBounds(board);
-      g.ellipse(b.cx, b.cy + 10, b.w * 0.52, b.h * 0.48);
-      g.fill({ color: 0x0a141c, alpha: 0.55 });
+      for (const hex of Object.values(board.hexes)) {
+        const p = pointyHexToPixel(hex, HEX_SIZE);
+        const pts: number[] = [];
+        for (let i = 0; i < 6; i++) {
+          const c = hexCorner({ x: p.x, y: p.y + 4 }, HEX_SIZE + 3, i);
+          pts.push(c.x, c.y);
+        }
+        g.poly(pts);
+        g.fill({ color: 0x071018, alpha: 0.4 });
+      }
+    },
+    [board],
+  );
+  return <pixiGraphics draw={draw} eventMode="none" />;
+}
+
+function CoastFoam({ board }: { board: Board }) {
+  const draw = useCallback(
+    (g: PixiGraphics) => {
+      g.clear();
+      const land = board.hexes;
+      for (const hex of Object.values(land)) {
+        const c = pointyHexToPixel(hex, HEX_SIZE);
+        for (let i = 0; i < 6; i++) {
+          const n = addAxial(hex, HEX_DIRS[i]!);
+          if (land[hexId(n.q, n.r)]) continue;
+          const a = hexCorner(c, HEX_SIZE, i);
+          const b = hexCorner(c, HEX_SIZE, (i + 1) % 6);
+          const mx = (a.x + b.x) / 2;
+          const my = (a.y + b.y) / 2;
+          const len = Math.hypot(mx - c.x, my - c.y) || 1;
+          const nx = (mx - c.x) / len;
+          const ny = (my - c.y) / len;
+          g.moveTo(a.x + nx * 1.5, a.y + ny * 1.5);
+          g.lineTo(b.x + nx * 1.5, b.y + ny * 1.5);
+          g.stroke({ width: 2.5, color: 0x9ad1e5, alpha: 0.7 });
+          g.moveTo(a.x + nx * 3.5, a.y + ny * 3.5);
+          g.lineTo(b.x + nx * 3.5, b.y + ny * 3.5);
+          g.stroke({ width: 1.5, color: 0xf4e8c8, alpha: 0.35 });
+        }
+      }
     },
     [board],
   );
