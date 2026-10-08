@@ -628,7 +628,7 @@ function boardHint(
   if (robbers) return "Clique num terreno para pousar o ladrão.";
   if (settles) return "Os pontos dourados marcam onde fundar uma aldeia.";
   if (cities) return "Troque a aldeia por uma cidadela.";
-  if (roads) return "Toque no caminho de terra dourado junto da aldeia.";
+  if (roads) return "Toque no rasto de terra junto da aldeia.";
   return "Arraste o mapa. A roda do rato aproxima.";
 }
 
@@ -743,31 +743,52 @@ function DirtTrack({
   ghost: boolean;
   hovered: boolean;
 }) {
-  const [t, setT] = useState(0);
-  useTick(() => {
-    if (ghost) setT(performance.now());
-  });
   const draw = useCallback(
     (g: PixiGraphics) => {
-      const pad = 12;
-      const L = Math.max(8, length - pad * 2);
-      const pulse = ghost ? 0.12 * Math.sin(t / 220) : 0;
+      const pad = 11;
+      const L = Math.max(10, length - pad * 2);
+      const steps = Math.max(4, Math.round(L / 6.5));
       g.clear();
-      g.roundRect(-L / 2, -3, L, 6, 2);
-      g.fill({ color: 0x3d2a1c, alpha: ghost ? 0.4 + pulse : 0.9 });
-      g.roundRect(-L / 2 + 1, -2, L - 2, 4, 1);
-      g.fill({ color: 0x8a6840, alpha: ghost ? 0.38 + pulse : 0.92 });
-      g.roundRect(-L / 2 + 3, -1, L - 6, 2, 1);
-      g.fill({ color: ghost ? PALETTE.gold : 0xc4a56a, alpha: ghost ? (hovered ? 0.95 : 0.7 + pulse) : 0.7 });
-      if (!ghost) {
-        const mark = FACTION_HEX[color] ?? 0xe8e0d0;
-        g.circle(0, -5, 2.2);
-        g.fill({ color: mark });
-        g.circle(0, -7, 1.4);
-        g.fill({ color: PALETTE.gold });
+      if (ghost) {
+        const a = hovered ? 0.34 : 0.14;
+        for (let i = 0; i <= steps; i++) {
+          const u = i / steps;
+          const x = -L / 2 + u * L;
+          const wobble = Math.sin(i * 1.7) * 0.35;
+          g.ellipse(x, wobble, 4, hovered ? 1.6 : 1.25);
+          g.fill({ color: 0x7a5a38, alpha: a });
+        }
+        if (hovered) {
+          g.roundRect(-L / 2 + 3, -0.5, L - 6, 1, 0.5);
+          g.fill({ color: PALETTE.gold, alpha: 0.28 });
+        }
+        return;
       }
+      for (let i = 0; i <= steps; i++) {
+        const u = i / steps;
+        const x = -L / 2 + u * L;
+        const wobble = Math.sin(i * 2.1) * 0.5;
+        const taper = 1 - Math.abs(u - 0.5) * 0.32;
+        g.ellipse(x, wobble + 0.35, 5.1 * taper, 2.15 * taper);
+        g.fill({ color: 0x4a3424, alpha: 0.58 });
+      }
+      for (let i = 0; i <= steps; i++) {
+        const u = i / steps;
+        const x = -L / 2 + u * L;
+        const wobble = Math.sin(i * 2.1 + 0.5) * 0.35;
+        const taper = 1 - Math.abs(u - 0.5) * 0.28;
+        g.ellipse(x, wobble, 3.4 * taper, 1.35 * taper);
+        g.fill({ color: 0x9a7a4c, alpha: 0.72 });
+      }
+      g.roundRect(-L / 2 + 1, -0.7, L - 2, 1.4, 0.7);
+      g.fill({ color: 0xb08a58, alpha: 0.4 });
+      const mark = FACTION_HEX[color] ?? 0xe8e0d0;
+      g.ellipse(0, 0.25, 1.7, 1);
+      g.fill({ color: 0x3a2818, alpha: 0.75 });
+      g.ellipse(0, 0.05, 1.15, 0.65);
+      g.fill({ color: mark, alpha: 0.8 });
     },
-    [length, color, ghost, hovered, t],
+    [length, color, ghost, hovered],
   );
   return <pixiGraphics draw={draw} />;
 }
