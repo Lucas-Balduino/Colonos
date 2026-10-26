@@ -3,10 +3,10 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { createGame, reduce } from "../core/reduce.ts";
-import { projectStateFor } from "../core/view.ts";
+import { projectEventsFor, projectStateFor } from "../core/view.ts";
 import { nextBotAction } from "../ai/bot.ts";
 import type { ClientMsg, ServerMsg } from "../protocol.ts";
-import type { GameState, PlayerId } from "../core/types.ts";
+import type { GameEvent, GameState, PlayerId } from "../core/types.ts";
 import { parseClientMsg } from "./validate.ts";
 
 const PROD = process.env.NODE_ENV === "production";
@@ -59,10 +59,14 @@ function broadcastLobby(room: Room): void {
   }
 }
 
-function broadcastViews(room: Room): void {
+function broadcastViews(room: Room, events: GameEvent[] = []): void {
   if (!room.state) return;
   for (const [pid, ws] of room.sockets) {
-    send(ws, { type: "view", view: projectStateFor(room.state, pid) });
+    send(ws, {
+      type: "view",
+      view: projectStateFor(room.state, pid),
+      events: projectEventsFor(events, pid),
+    });
   }
 }
 
@@ -78,7 +82,7 @@ function scheduleBots(room: Room): void {
     const r = reduce(room.state, next);
     if (!r.ok) return;
     room.state = r.state;
-    broadcastViews(room);
+    broadcastViews(room, r.events);
     scheduleBots(room);
   }, 520);
 }
@@ -138,7 +142,7 @@ function handle(ws: WebSocket, msg: ClientMsg, ctx: { playerId?: PlayerId; room?
         ctx.room = room;
         ctx.token = seat.token;
         send(ws, { type: "joined", code: room.code, token: seat.token!, playerId: seat.id, host: seat.id === room.hostId });
-        if (room.state) send(ws, { type: "view", view: projectStateFor(room.state, seat.id) });
+        if (room.state) send(ws, { type: "view", view: projectStateFor(room.state, seat.id), events: [] });
         else broadcastLobby(room);
         return;
       }
@@ -223,7 +227,7 @@ function handle(ws: WebSocket, msg: ClientMsg, ctx: { playerId?: PlayerId; room?
       return;
     }
     room.state = r.state;
-    broadcastViews(room);
+    broadcastViews(room, r.events);
     scheduleBots(room);
   }
 }

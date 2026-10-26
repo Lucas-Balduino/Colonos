@@ -27,3 +27,7 @@ export function AnimClockProvider({ children }: { children: React.ReactNode }) {
 export function useAnimFrame(): number {
   return useSyncExternalStore(subscribe, getFrame, getFrame);
 }
+
+export function animFrameNow(): number {
+  return Math.floor(performance.now() / 83);
+}

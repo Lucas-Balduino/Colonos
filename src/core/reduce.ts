@@ -30,6 +30,7 @@ import type {
   Action,
   CreateGameOptions,
   DevCardType,
+  GameEvent,
   GameState,
   Player,
   PlayerId,
@@ -63,8 +64,39 @@ function recurso(resource: Resource): string {
   return RESOURCE_LABEL[resource].toLowerCase();
 }
 
+let pendingEvents: GameEvent[] = [];
+
+function emit(event: GameEvent): void {
+  pendingEvents.push(event);
+}
+
+function noteAwards(state: GameState): void {
+  const road = state.longestRoadPlayerId;
+  const army = state.largestArmyPlayerId;
+  refreshAwards(state.board, state.players, state);
+  if (state.longestRoadPlayerId !== road) {
+    emit({ type: "award", kind: "longestRoad", playerId: state.longestRoadPlayerId });
+  }
+  if (state.largestArmyPlayerId !== army) {
+    emit({ type: "award", kind: "largestArmy", playerId: state.largestArmyPlayerId });
+  }
+}
+
+function finishIfWon(state: GameState, player: Player): void {
+  if (state.phase.type === "gameOver") return;
+  checkVictory(state, player);
+  const phaseType: string = state.phase.type;
+  if (phaseType === "gameOver") emit({ type: "won", playerId: player.id });
+}
+
 function produce(state: GameState, total: number): void {
-  const claims: Array<{ player: Player; resource: Resource; n: number }> = [];
+  const claims: Array<{
+    hexId: string;
+    vertexId: string;
+    player: Player;
+    resource: Resource;
+    n: number;
+  }> = [];
   for (const hex of Object.values(state.board.hexes)) {
     if (hex.number !== total) continue;
     if (hex.id === state.board.robberHexId) continue;
@@ -75,7 +107,7 @@ function produce(state: GameState, total: number): void {
       if (!b) continue;
       const player = playerById(state, b.owner);
       const n = b.type === "city" ? 2 : 1;
-      claims.push({ player, resource: res, n });
+      claims.push({ hexId: hex.id, vertexId: vid, player, resource: res, n });
     }
   }
   for (const resource of ["wood", "brick", "sheep", "wheat", "ore"] as Resource[]) {
@@ -89,21 +121,41 @@ function produce(state: GameState, total: number): void {
     const receivers = [...owedBy.values()].filter((row) => row.n > 0);
     if (receivers.length === 0) continue;
     const owed = receivers.reduce((sum, row) => sum + row.n, 0);
+    const paid = new Map<PlayerId, number>();
     if (owed <= state.bank[resource]) {
       for (const row of receivers) {
         subFrom(state.bank, { [resource]: row.n });
         addTo(row.player.resources, { [resource]: row.n });
+        paid.set(row.player.id, row.n);
       }
-      continue;
+    } else {
+      log(state, `O banco não tem ${recurso(resource)} suficiente.`);
+      if (receivers.length === 1) {
+        const row = receivers[0]!;
+        const give = Math.min(row.n, state.bank[resource]);
+        if (give > 0) {
+          subFrom(state.bank, { [resource]: give });
+          addTo(row.player.resources, { [resource]: give });
+          paid.set(row.player.id, give);
+        }
+      }
     }
-    log(state, `O banco não tem ${recurso(resource)} suficiente.`);
-    if (receivers.length === 1) {
-      const row = receivers[0]!;
-      const give = Math.min(row.n, state.bank[resource]);
-      if (give > 0) {
-        subFrom(state.bank, { [resource]: give });
-        addTo(row.player.resources, { [resource]: give });
-      }
+    const left = new Map(paid);
+    for (const claim of claims) {
+      if (claim.resource !== resource) continue;
+      const remain = left.get(claim.player.id) ?? 0;
+      if (remain <= 0) continue;
+      const amount = Math.min(claim.n, remain);
+      left.set(claim.player.id, remain - amount);
+      if (amount <= 0) continue;
+      emit({
+        type: "produced",
+        hexId: claim.hexId,
+        playerId: claim.player.id,
+        vertexId: claim.vertexId,
+        resource,
+        amount,
+      });
     }
   }
 }
@@ -125,6 +177,7 @@ function placeSettlement(state: GameState, player: Player, vertexId: string, set
   v.building = { type: "settlement", owner: player.id };
   player.settlements.push(vertexId);
   player.settlementsLeft -= 1;
+  emit({ type: "built", kind: "settlement", id: vertexId, playerId: player.id });
 }
 
 function placeRoad(state: GameState, player: Player, edgeId: string, free: boolean): void {
@@ -144,7 +197,8 @@ function placeRoad(state: GameState, player: Player, edgeId: string, free: boole
   e.road = player.id;
   player.roads.push(edgeId);
   player.roadsLeft -= 1;
-  refreshAwards(state.board, state.players, state);
+  emit({ type: "built", kind: "road", id: edgeId, playerId: player.id });
+  noteAwards(state);
 }
 
 function advanceSetupAfterRoad(state: GameState): void {
@@ -173,6 +227,14 @@ function grantStartingResources(state: GameState, player: Player, vertexId: stri
   for (const hex of hexesOfVertex(state.board, vertexId)) {
     if (hex.terrain === "desert") continue;
     takeFromBank(state, player, { [hex.terrain]: 1 });
+    emit({
+      type: "produced",
+      hexId: hex.id,
+      playerId: player.id,
+      vertexId,
+      resource: hex.terrain,
+      amount: 1,
+    });
   }
 }
 
@@ -209,18 +271,22 @@ function stealOne(state: GameState, thief: Player, fromId: PlayerId): void {
   for (const r of ["wood", "brick", "sheep", "wheat", "ore"] as Resource[]) {
     for (let i = 0; i < victim.resources[r]; i++) bag.push(r);
   }
-  if (bag.length === 0) return;
+  if (bag.length === 0) {
+    emit({ type: "stole", thief: thief.id, victim: fromId, resource: null });
+    return;
+  }
   const pick = nextInt(state.rng, 0, bag.length - 1);
   state.rng = pick.rng;
   const res = bag[pick.value]!;
   victim.resources[res] -= 1;
   thief.resources[res] += 1;
+  emit({ type: "stole", thief: thief.id, victim: victim.id, resource: res });
   log(state, `${thief.name} roubou uma carta de ${victim.name}.`, thief.id);
 }
 
 function nextTurn(state: GameState): void {
   const p = currentPlayer(state);
-  checkVictory(state, p);
+  finishIfWon(state, p);
   if (state.phase.type === "gameOver") return;
   state.currentPlayerIndex = (state.currentPlayerIndex + 1) % state.players.length;
   if (state.currentPlayerIndex === 0) state.turnNumber += 1;
@@ -272,6 +338,7 @@ function apply(state: GameState, action: Action): void {
       const b = nextInt(a.rng, 1, 6);
       state.rng = b.rng;
       state.dice = [a.value, b.value];
+      emit({ type: "rolled", dice: [a.value, b.value] });
       const total = a.value + b.value;
       log(state, `${p.name} rolou ${a.value}+${b.value} = ${total}.`, p.id);
       if (total === 7) afterSeven(state);
@@ -296,6 +363,7 @@ function apply(state: GameState, action: Action): void {
       }
       subFrom(p.resources, action.resources);
       addTo(state.bank, action.resources);
+      emit({ type: "discarded", playerId: p.id, count: need });
       state.phase.queue.shift();
       log(state, `${p.name} descartou ${need} cartas.`, p.id);
       if (state.phase.queue.length === 0) state.phase = { type: "moveRobber", after: "main" };
@@ -308,7 +376,9 @@ function apply(state: GameState, action: Action): void {
       if (action.hexId === state.board.robberHexId) {
         throw new RuleError("same-hex", "O ladrão deve ir para outro terreno.");
       }
+      const fromHex = state.board.robberHexId;
       state.board.robberHexId = action.hexId;
+      emit({ type: "robberMoved", from: fromHex, to: action.hexId, playerId: p.id });
       log(state, `${p.name} moveu o ladrão.`, p.id);
       afterRobberMove(state, p, action.hexId, action.stealFrom);
       return;
@@ -332,6 +402,7 @@ function apply(state: GameState, action: Action): void {
       if (state.bank[action.take] < 1) throw new RuleError("bank-empty", "Banco sem esse recurso.");
       pay(state, p, cost, "comércio marítimo");
       takeFromBank(state, p, { [action.take]: 1 });
+      emit({ type: "tradedBank", playerId: p.id, give: action.give, take: action.take, ratio });
       log(state, `${p.name} trocou ${ratio} ${recurso(action.give)} por 1 ${recurso(action.take)}.`, p.id);
       return;
     }
@@ -361,6 +432,13 @@ function apply(state: GameState, action: Action): void {
       addTo(other.resources, offer.give);
       subFrom(other.resources, offer.want);
       addTo(owner.resources, offer.want);
+      emit({
+        type: "tradedPlayers",
+        from: offer.from,
+        to: other.id,
+        give: cloneResources(offer.give),
+        take: cloneResources(offer.want),
+      });
       state.tradeOffers = state.tradeOffers.filter((o) => o.id !== offer.id);
       log(state, `${other.name} aceitou a troca de ${owner.name}.`, other.id);
       return;
@@ -379,9 +457,9 @@ function apply(state: GameState, action: Action): void {
       const p = assertCurrent(state, action.playerId);
       if (state.phase.type !== "main") throw new RuleError("phase", "Construção só no turno principal.");
       placeSettlement(state, p, action.vertexId, false);
-      refreshAwards(state.board, state.players, state);
+      noteAwards(state);
       log(state, `${p.name} construiu uma aldeia.`, p.id);
-      checkVictory(state, p);
+      finishIfWon(state, p);
       return;
     }
     case "BUILD_CITY": {
@@ -398,8 +476,9 @@ function apply(state: GameState, action: Action): void {
       p.cities.push(action.vertexId);
       p.settlementsLeft += 1;
       p.citiesLeft -= 1;
+      emit({ type: "built", kind: "city", id: action.vertexId, playerId: p.id });
       log(state, `${p.name} elevou uma aldeia a cidade.`, p.id);
-      checkVictory(state, p);
+      finishIfWon(state, p);
       return;
     }
     case "BUILD_ROAD": {
@@ -407,7 +486,7 @@ function apply(state: GameState, action: Action): void {
       if (state.phase.type !== "main") throw new RuleError("phase", "Construção só no turno principal.");
       placeRoad(state, p, action.edgeId, false);
       log(state, `${p.name} construiu uma estrada.`, p.id);
-      checkVictory(state, p);
+      finishIfWon(state, p);
       return;
     }
     case "BUY_DEV": {
@@ -417,8 +496,9 @@ function apply(state: GameState, action: Action): void {
       pay(state, p, COSTS.dev, "carta de desenvolvimento");
       const card = state.devDeck.pop()!;
       p.devCards.push({ type: card, playable: false });
+      emit({ type: "devBought", playerId: p.id });
       log(state, `${p.name} comprou uma carta de desenvolvimento.`, p.id);
-      checkVictory(state, p);
+      finishIfWon(state, p);
       return;
     }
     case "PLAY_KNIGHT": {
@@ -430,11 +510,12 @@ function apply(state: GameState, action: Action): void {
       consumeDev(p, action.type);
       state.playedDevThisTurn = true;
       p.knightsPlayed += 1;
-      refreshAwards(state.board, state.players, state);
+      noteAwards(state);
       const after = state.phase.type === "roll" ? "roll" : "main";
       state.phase = { type: "moveRobber", after };
+      emit({ type: "devPlayed", playerId: p.id, card: "knight" });
       log(state, `${p.name} jogou um cavaleiro.`, p.id);
-      checkVictory(state, p);
+      finishIfWon(state, p);
       return;
     }
     case "PLAY_ROAD_BUILDING": {
@@ -443,6 +524,7 @@ function apply(state: GameState, action: Action): void {
       if (state.playedDevThisTurn) throw new RuleError("one-dev", "Só uma carta por turno.");
       consumeDev(p, action.type);
       state.playedDevThisTurn = true;
+      emit({ type: "devPlayed", playerId: p.id, card: "roadBuilding" });
       const leftover = Math.min(2, p.roadsLeft);
       if (leftover === 0) throw new RuleError("pieces", "Sem estradas para a carta.");
       state.phase = { type: "freeRoads", remaining: leftover };
@@ -455,6 +537,7 @@ function apply(state: GameState, action: Action): void {
       if (state.playedDevThisTurn) throw new RuleError("one-dev", "Só uma carta por turno.");
       consumeDev(p, action.type);
       state.playedDevThisTurn = true;
+      emit({ type: "devPlayed", playerId: p.id, card: "yearOfPlenty" });
       const [r1, r2] = action.resources;
       takeFromBank(state, p, {
         [r1]: r1 === r2 ? 2 : 1,
@@ -469,6 +552,7 @@ function apply(state: GameState, action: Action): void {
       if (state.playedDevThisTurn) throw new RuleError("one-dev", "Só uma carta por turno.");
       consumeDev(p, action.type);
       state.playedDevThisTurn = true;
+      emit({ type: "devPlayed", playerId: p.id, card: "monopoly" });
       let taken = 0;
       for (const other of state.players) {
         if (other.id === p.id) continue;
@@ -504,12 +588,16 @@ function normalize(state: GameState): void {
 }
 
 export function reduce(state: GameState, action: Action): ReduceResult {
+  const events: GameEvent[] = [];
+  pendingEvents = events;
   try {
     const next = structuredClone(state) as GameState;
     apply(next, action);
     normalize(next);
-    return { ok: true, state: next };
+    pendingEvents = [];
+    return { ok: true, state: next, events };
   } catch (err) {
+    pendingEvents = [];
     if (err instanceof RuleError) {
       return { ok: false, error: { code: err.code, message: err.message } };
     }

@@ -167,8 +167,29 @@ export interface RuleErrorShape {
   message: string;
 }
 
+export type GameEvent =
+  | { type: "rolled"; dice: [number, number] }
+  | {
+      type: "produced";
+      hexId: HexId;
+      playerId: PlayerId;
+      vertexId: VertexId;
+      resource: Resource;
+      amount: number;
+    }
+  | { type: "built"; kind: "road" | "settlement" | "city"; id: string; playerId: PlayerId }
+  | { type: "robberMoved"; from: HexId; to: HexId; playerId: PlayerId }
+  | { type: "stole"; thief: PlayerId; victim: PlayerId; resource: Resource | null }
+  | { type: "discarded"; playerId: PlayerId; count: number }
+  | { type: "tradedBank"; playerId: PlayerId; give: Resource; take: Resource; ratio: number }
+  | { type: "tradedPlayers"; from: PlayerId; to: PlayerId; give: ResourceMap; take: ResourceMap }
+  | { type: "devBought"; playerId: PlayerId }
+  | { type: "devPlayed"; playerId: PlayerId; card: DevCardType }
+  | { type: "award"; kind: "longestRoad" | "largestArmy"; playerId: PlayerId | null }
+  | { type: "won"; playerId: PlayerId };
+
 export type ReduceResult =
-  | { ok: true; state: GameState }
+  | { ok: true; state: GameState; events: GameEvent[] }
   | { ok: false; error: RuleErrorShape };
 
 export interface PublicPlayerView {

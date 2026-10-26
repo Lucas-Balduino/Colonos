@@ -2,12 +2,28 @@ import { legalActions } from "./legal.ts";
 import { countResources } from "./resources.ts";
 import { bestBankRatio } from "./rules.ts";
 import { visibleVictoryPoints } from "./scoring.ts";
-import { RESOURCES, type GameState, type Player, type PlayerId, type PublicView, type Resource } from "./types.ts";
+import {
+  RESOURCES,
+  type GameEvent,
+  type GameState,
+  type Player,
+  type PlayerId,
+  type PublicView,
+  type Resource,
+} from "./types.ts";
 
 function bankRatiosFor(state: GameState, player: Player): Record<Resource, 2 | 3 | 4> {
   const ratios = {} as Record<Resource, 2 | 3 | 4>;
   for (const resource of RESOURCES) ratios[resource] = bestBankRatio(state, player, resource);
   return ratios;
+}
+
+export function projectEventsFor(events: GameEvent[], viewerId: PlayerId | null): GameEvent[] {
+  return events.map((event) => {
+    if (event.type !== "stole") return event;
+    if (viewerId === event.thief || viewerId === event.victim) return event;
+    return { ...event, resource: null };
+  });
 }
 
 export function projectStateFor(state: GameState, viewerId: PlayerId | null): PublicView {

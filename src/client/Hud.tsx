@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog.tsx";
 import { ScrollArea } from "@/components/ui/scroll-area.tsx";
@@ -7,6 +7,8 @@ import type { Action, PublicView, Resource, ResourceMap } from "../core/types.ts
 import { CARD_SPRITE, CHIP_SPRITE, diceSprite, settlementSprite } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import type { BuildMode } from "./copy.ts";
+import type { EventBatch } from "./fx/batch.ts";
+import { useHeldResources } from "./fx/held.ts";
 
 export function Hud({
   view,
@@ -15,6 +17,7 @@ export function Hud({
   pendingRobberHex = null,
   buildMode = null,
   onBuildMode,
+  events,
 }: {
   view: PublicView;
   onAction: (a: Action) => boolean | void;
@@ -22,6 +25,7 @@ export function Hud({
   pendingRobberHex?: string | null;
   buildMode?: BuildMode | null;
   onBuildMode?: (mode: BuildMode) => void;
+  events?: EventBatch;
 }) {
   const you = view.players.find((p) => p.isYou);
   const yourTurn = Boolean(you && you.id === view.currentPlayerId);
@@ -31,10 +35,7 @@ export function Hud({
   const [plentyOpen, setPlentyOpen] = useState(false);
   const [plentySlots, setPlentySlots] = useState<Array<Resource | null>>([null, null]);
   const [monopolyOpen, setMonopolyOpen] = useState(false);
-  const [rolling, setRolling] = useState(false);
-  const [faces, setFaces] = useState<[number, number]>(view.dice ?? [1, 1]);
-  const prevDice = useRef(view.dice);
-  const prevWinner = useRef(view.winnerId);
+  const shown = useHeldResources(you?.resources ?? emptyResources(), events, you?.id ?? null);
 
   const discardCount = countResources(discard);
   const discardNeed = useMemo(() => {
@@ -42,32 +43,6 @@ export function Hud({
     const n = countResources(you.resources);
     return n > 7 ? Math.floor(n / 2) : 0;
   }, [view.phase, you]);
-
-  useEffect(() => {
-    if (!view.dice || view.dice === prevDice.current) {
-      if (view.dice) setFaces(view.dice);
-      return;
-    }
-    prevDice.current = view.dice;
-    setRolling(true);
-    sfx("dice");
-    let n = 0;
-    const id = window.setInterval(() => {
-      n += 1;
-      setFaces([1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)]);
-      if (n >= 10) {
-        window.clearInterval(id);
-        setFaces(view.dice!);
-        setRolling(false);
-      }
-    }, 45);
-    return () => window.clearInterval(id);
-  }, [view.dice]);
-
-  useEffect(() => {
-    if (view.winnerId && view.winnerId !== prevWinner.current) sfx("win");
-    prevWinner.current = view.winnerId;
-  }, [view.winnerId]);
 
   const tapDiscard = (r: Resource) => {
     if (!you?.resources) return;
@@ -93,7 +68,7 @@ export function Hud({
             <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Ilha das Lanternas</p>
             <h2 className="text-xl leading-none">Colonos</h2>
           </div>
-          <DicePair faces={faces} rolling={rolling} empty={!view.dice && !rolling} />
+          <DicePair faces={view.dice ?? [1, 1]} rolling={false} empty={!view.dice} />
         </div>
         {view.winnerId ? (
           <p className="bg-primary text-primary-foreground mt-2 px-2 py-1 text-center text-xs">
@@ -152,7 +127,7 @@ export function Hud({
           <p className="mb-2 text-sm">Sua mão</p>
           <div className="flex gap-1.5 overflow-x-auto pb-1">
             {RESOURCES.map((r) => {
-              const n = you.resources![r];
+              const n = shown[r];
               const selected = give === r;
               const inCost =
                 (view.phase.type === "main" && yourTurn && (COSTS.road[r] || COSTS.settlement[r] || COSTS.city[r])) ??
@@ -475,13 +450,22 @@ export function BuildPanel({
   );
 }
 
-export function ResourceStrip({ resources }: { resources: ResourceMap }) {
+export function ResourceStrip({
+  resources,
+  batch,
+  viewerId = null,
+}: {
+  resources: ResourceMap;
+  batch?: EventBatch;
+  viewerId?: string | null;
+}) {
+  const shown = useHeldResources(resources, batch, viewerId);
   return (
     <div className="flex shrink-0 gap-0.5">
       {RESOURCES.map((r) => (
         <span key={r} className="grid w-7 place-items-center leading-none">
           <img src={CHIP_SPRITE[r]} alt={RESOURCE_LABEL[r]} className="pixelated size-5" />
-          <span className="text-[10px]">{resources[r]}</span>
+          <span className="text-[10px]">{shown[r]}</span>
         </span>
       ))}
     </div>

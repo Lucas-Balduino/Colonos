@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Application, extend } from "@pixi/react";
 import { LocateFixed, Minus, Plus } from "lucide-react";
 import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
@@ -18,9 +18,11 @@ import {
 } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import { FACTION_HEX, PALETTE } from "./theme.ts";
-import { AnimClockProvider, useAnimFrame } from "./anim-clock.tsx";
+import { AnimClockProvider, animFrameNow, useAnimFrame } from "./anim-clock.tsx";
 import { buildModeCopy, phaseCopy, type BuildMode } from "./copy.ts";
 import { preloadSprites } from "./preload.ts";
+import { FxLayer } from "./fx/FxLayer.tsx";
+import { holdFx, motionMs, type EventBatch } from "./fx/batch.ts";
 
 extend({ Container, Graphics, Sprite, Text });
 
@@ -150,7 +152,7 @@ function useTextures() {
     }).then((loaded) => {
       if (!live) return;
       const next: Record<string, Texture> = {};
-      for (const url of BOARD_URLS) {
+      for (const url of [...BOARD_URLS, ...Object.values(CHIP_SPRITE)]) {
         if (loaded[url]) next[url] = loaded[url]!;
       }
       setMap(next);
@@ -170,6 +172,7 @@ export function BoardView({
   onPendingRobber,
   buildMode = null,
   onClearBuild,
+  events,
 }: {
   view: PublicView;
   onAction: (a: Action) => boolean | void;
@@ -177,6 +180,7 @@ export function BoardView({
   onPendingRobber?: (hexId: string | null) => void;
   buildMode?: BuildMode | null;
   onClearBuild?: () => void;
+  events: EventBatch;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const { map: textures, progress } = useTextures();
@@ -193,8 +197,8 @@ export function BoardView({
   const [pendingRobberHex, setPendingRobberHex] = useState<string | null>(null);
   const [tipId, setTipId] = useState<string | null>(null);
   const [robberPos, setRobberPos] = useState(view.board.robberHexId);
-  const [flash, setFlash] = useState<Set<string>>(new Set());
-  const [pops, setPops] = useState<Record<string, number>>({});
+  const [drops, setDrops] = useState<Record<string, number>>({});
+  const [roads, setRoads] = useState<Record<string, { start: number; from: -1 | 1 }>>({});
   const drag = useRef<{
     sx: number;
     sy: number;
@@ -225,9 +229,8 @@ export function BoardView({
   if (import.meta.env.DEV) {
     window.__colonosBoardRenders = (window.__colonosBoardRenders ?? 0) + 1;
   }
-  const prevDice = useRef(view.dice);
-  const prevRobber = useRef(view.board.robberHexId);
-  const prevBuildings = useRef<string>("");
+  const seenFx = useRef(0);
+  const robberTimer = useRef(0);
 
   useEffect(() => {
     const el = host.current;
@@ -367,49 +370,55 @@ export function BoardView({
     });
   }, [view.board]);
 
-  useEffect(() => {
-    if (!view.dice || view.dice === prevDice.current) return;
-    prevDice.current = view.dice;
-    const sum = view.dice[0] + view.dice[1];
-    const hit = new Set<string>();
-    for (const h of Object.values(view.board.hexes)) {
-      if (h.number === sum && view.board.robberHexId !== h.id) hit.add(h.id);
-    }
-    setFlash(hit);
-    const t = window.setTimeout(() => setFlash(new Set()), 600);
-    return () => window.clearTimeout(t);
-  }, [view.dice, view.board]);
+  useEffect(() => () => window.clearInterval(robberTimer.current), []);
+
+  const finishDrop = useCallback((id: string) => {
+    setDrops((prev) => {
+      if (prev[id] == null) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  const finishRoad = useCallback((id: string) => {
+    setRoads((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
-    const dest = view.board.robberHexId;
-    if (dest === prevRobber.current) return;
-    const path = hexPath(prevRobber.current, dest);
-    prevRobber.current = dest;
-    let i = 0;
-    const tick = window.setInterval(() => {
-      setRobberPos(path[i]!);
-      i += 1;
-      if (i >= path.length) window.clearInterval(tick);
-    }, 90);
-    return () => window.clearInterval(tick);
-  }, [view.board.robberHexId]);
-
-  useEffect(() => {
-    const key = Object.values(view.board.vertices)
-      .map((v) => `${v.id}:${v.building?.type ?? ""}:${v.building?.owner ?? ""}`)
-      .join("|");
-    if (prevBuildings.current && prevBuildings.current !== key) {
-      const prev = new Set(prevBuildings.current.split("|"));
-      const nextPops: Record<string, number> = {};
-      for (const part of key.split("|")) {
-        if (!prev.has(part) && (part.includes("settlement") || part.includes("city"))) {
-          nextPops[part.split(":")[0]!] = performance.now();
-        }
+    if (events.seq === 0 || events.seq === seenFx.current) return;
+    seenFx.current = events.seq;
+    const start = animFrameNow();
+    const nextDrops: Record<string, number> = {};
+    const nextRoads: Record<string, { start: number; from: -1 | 1 }> = {};
+    for (const event of events.events) {
+      if (event.type === "built" && (event.kind === "settlement" || event.kind === "city")) {
+        nextDrops[event.id] = start;
       }
-      if (Object.keys(nextPops).length) setPops((p) => ({ ...p, ...nextPops }));
+      if (event.type === "built" && event.kind === "road") {
+        nextRoads[event.id] = { start, from: roadRevealFrom(view.board, event.playerId, event.id) };
+      }
+      if (event.type === "robberMoved") {
+        window.clearInterval(robberTimer.current);
+        const path = hexPath(event.from, event.to);
+        let step = 0;
+        setRobberPos(event.from);
+        holdFx(path.length * 90);
+        robberTimer.current = window.setInterval(() => {
+          setRobberPos(path[step] ?? event.to);
+          step += 1;
+          if (step >= path.length) window.clearInterval(robberTimer.current);
+        }, motionMs(90));
+      }
     }
-    prevBuildings.current = key;
-  }, [view.board.vertices]);
+    if (Object.keys(nextDrops).length) setDrops((prev) => ({ ...prev, ...nextDrops }));
+    if (Object.keys(nextRoads).length) setRoads((prev) => ({ ...prev, ...nextRoads }));
+  }, [events, view.board]);
 
   const invalid = () => {
     sfx("illegal");
@@ -734,7 +743,7 @@ export function BoardView({
         <AnimClockProvider>
         <pixiContainer x={size.w / 2 + pan.x + nudge} y={size.h / 2 + pan.y} scale={zoom}>
           <pixiContainer x={-origin.x} y={-origin.y}>
-            <IslandPicture board={view.board} textures={textures} flash={flash} origin={origin} />
+            <IslandPicture board={view.board} textures={textures} origin={origin} />
             {sortedEdges.map((edge) => {
               const a = vertexPos(view.board, edge.vertices[0]);
               const b = vertexPos(view.board, edge.vertices[1]);
@@ -753,13 +762,18 @@ export function BoardView({
                   rotation={ang}
                   eventMode="none"
                 >
-                  {ghost || edge.road ? (
-                    <DirtTrack
+                  {roads[edge.id] ? (
+                    <RevealingTrack
                       length={length}
                       color={color}
-                      ghost={ghost}
                       hovered={hovered}
+                      startFrame={roads[edge.id]!.start}
+                      from={roads[edge.id]!.from}
+                      edgeId={edge.id}
+                      onDone={finishRoad}
                     />
+                  ) : ghost || edge.road ? (
+                    <DirtTrack length={length} color={color} ghost={ghost} hovered={hovered} />
                   ) : null}
                 </pixiContainer>
               );
@@ -776,17 +790,8 @@ export function BoardView({
               const kind = previewCity ? "city" : (v.building?.type ?? "settlement");
               const url = kind === "city" ? citySprite(color) : settlementSprite(color);
               const tex = textures?.[url];
-              const born = pops[v.id];
-              const age = born ? Math.min(1, (performance.now() - born) / 180) : 1;
-              const popScale = v.building && born ? 0.7 + age * 0.3 : 1;
-              return (
-                <pixiContainer
-                  key={v.id}
-                  x={p.x}
-                  y={p.y}
-                  scale={popScale * 0.82}
-                  eventMode="none"
-                >
+              const piece = (
+                <pixiContainer scale={0.82} eventMode="none">
                   {ghost || v.building ? <VertexPad /> : null}
                   {(ghost || cityPick) && !hovered ? <SurveyStakes color={color} /> : null}
                   {((ghost && hovered) || (v.building && !previewCity) || previewCity) && tex ? (
@@ -799,6 +804,18 @@ export function BoardView({
                   ) : null}
                 </pixiContainer>
               );
+              const drop = v.building ? drops[v.id] : undefined;
+              return (
+                <pixiContainer key={v.id} x={p.x} y={p.y} eventMode="none">
+                  {drop != null ? (
+                    <FallingHouse startFrame={drop} vertexId={v.id} onDone={finishDrop}>
+                      {piece}
+                    </FallingHouse>
+                  ) : (
+                    piece
+                  )}
+                </pixiContainer>
+              );
             })}
             {hoverHex ? (
               <pixiContainer x={pointyHexToPixel(hoverHex, HEX_SIZE).x} y={pointyHexToPixel(hoverHex, HEX_SIZE).y}>
@@ -806,7 +823,13 @@ export function BoardView({
                 <RobberSprite x={0} y={-4} textures={textures} alpha={0.5} />
               </pixiContainer>
             ) : null}
-            <RobberSprite x={robberPixel.x} y={robberPixel.y - 4} textures={textures} />
+            <RobberSprite
+              x={robberPixel.x}
+              y={robberPixel.y - 4}
+              textures={textures}
+              hopping={robberPos !== view.board.robberHexId}
+            />
+            <FxLayer batch={events} board={view.board} textures={textures} players={view.players} />
             {pendingRobberHex && view.board.hexes[pendingRobberHex] ? (
               <RobberSprite
                 x={pointyHexToPixel(view.board.hexes[pendingRobberHex], HEX_SIZE).x}
@@ -902,17 +925,20 @@ function RobberSprite({
   y,
   textures,
   alpha = 1,
+  hopping = false,
 }: {
   x: number;
   y: number;
   textures: Record<string, Texture> | null;
   alpha?: number;
+  hopping?: boolean;
 }) {
   const frame = useAnimFrame();
   const blink = Math.floor((frame * 83) / 380) % 2;
+  const hop = hopping && frame % 2 === 0 ? 2 : 0;
   const tex = textures?.[`/sprites/robber-${blink}.png`];
   if (!tex) return null;
-  return <pixiSprite texture={tex} x={x} y={y} alpha={alpha} anchor={{ x: 0.5, y: 0.85 }} eventMode="none" />;
+  return <pixiSprite texture={tex} x={x} y={y - hop} alpha={alpha} anchor={{ x: 0.5, y: 0.85 }} eventMode="none" />;
 }
 
 function TableLoading({ progress }: { progress: number }) {
@@ -1002,36 +1028,47 @@ function DirtTrack({
   color,
   ghost,
   hovered,
+  reveal = 1,
+  from = -1,
 }: {
   length: number;
   color: string;
   ghost: boolean;
   hovered: boolean;
+  reveal?: number;
+  from?: -1 | 1;
 }) {
   const draw = useCallback(
     (g: PixiGraphics) => {
       const pad = 11;
       const L = Math.max(10, length - pad * 2);
       const steps = Math.max(4, Math.round(L / 6.5));
+      const left = -L / 2;
+      const shown = (x: number) => {
+        if (reveal >= 1) return true;
+        if (from < 0) return x <= left + reveal * L + 0.5;
+        return x >= left + (1 - reveal) * L - 0.5;
+      };
       g.clear();
       if (ghost) {
         const a = hovered ? 0.34 : 0.14;
         for (let i = 0; i <= steps; i++) {
           const u = i / steps;
-          const x = -L / 2 + u * L;
+          const x = left + u * L;
           const wobble = Math.sin(i * 1.7) * 0.35;
           g.ellipse(x, wobble, 4, hovered ? 1.6 : 1.25);
           g.fill({ color: 0x7a5a38, alpha: a });
         }
         if (hovered) {
-          g.roundRect(-L / 2 + 3, -0.5, L - 6, 1, 0.5);
+          g.roundRect(left + 3, -0.5, L - 6, 1, 0.5);
           g.fill({ color: PALETTE.gold, alpha: 0.28 });
         }
         return;
       }
       for (let i = 0; i <= steps; i++) {
         const u = i / steps;
-        const x = -L / 2 + u * L;
+        const x = left + u * L;
+        if (!shown(x)) continue;
         const wobble = Math.sin(i * 2.1) * 0.5;
         const taper = 1 - Math.abs(u - 0.5) * 0.32;
         g.ellipse(x, wobble + 0.35, 5.1 * taper, 2.15 * taper);
@@ -1039,23 +1076,136 @@ function DirtTrack({
       }
       for (let i = 0; i <= steps; i++) {
         const u = i / steps;
-        const x = -L / 2 + u * L;
+        const x = left + u * L;
+        if (!shown(x)) continue;
         const wobble = Math.sin(i * 2.1 + 0.5) * 0.35;
         const taper = 1 - Math.abs(u - 0.5) * 0.28;
         g.ellipse(x, wobble, 3.4 * taper, 1.35 * taper);
         g.fill({ color: 0x9a7a4c, alpha: 0.72 });
       }
-      g.roundRect(-L / 2 + 1, -0.7, L - 2, 1.4, 0.7);
+      if (reveal >= 1) {
+        g.roundRect(left + 1, -0.7, L - 2, 1.4, 0.7);
+      } else {
+        const x0 = from < 0 ? left : left + (1 - reveal) * L;
+        g.roundRect(x0, -0.7, Math.max(1, reveal * L), 1.4, 0.7);
+      }
       g.fill({ color: 0xb08a58, alpha: 0.4 });
-      const mark = FACTION_HEX[color] ?? 0xe8e0d0;
-      g.ellipse(0, 0.25, 1.7, 1);
-      g.fill({ color: 0x3a2818, alpha: 0.75 });
-      g.ellipse(0, 0.05, 1.15, 0.65);
-      g.fill({ color: mark, alpha: 0.8 });
+      if (shown(0)) {
+        const mark = FACTION_HEX[color] ?? 0xe8e0d0;
+        g.ellipse(0, 0.25, 1.7, 1);
+        g.fill({ color: 0x3a2818, alpha: 0.75 });
+        g.ellipse(0, 0.05, 1.15, 0.65);
+        g.fill({ color: mark, alpha: 0.8 });
+      }
     },
-    [length, color, ghost, hovered],
+    [length, color, ghost, hovered, reveal, from],
   );
   return <pixiGraphics draw={draw} />;
+}
+
+function roadRevealFrom(board: Board, playerId: string, edgeId: string): -1 | 1 {
+  const edge = board.edges[edgeId];
+  if (!edge) return -1;
+  const score = (vid: string) => {
+    const vertex = board.vertices[vid];
+    if (!vertex) return 0;
+    let n = vertex.building?.owner === playerId ? 2 : 0;
+    for (const eid of vertex.edges) {
+      if (eid !== edgeId && board.edges[eid]?.road === playerId) n += 1;
+    }
+    return n;
+  };
+  return score(edge.vertices[0]) >= score(edge.vertices[1]) ? -1 : 1;
+}
+
+function RevealingTrack({
+  length,
+  color,
+  hovered,
+  startFrame,
+  from,
+  edgeId,
+  onDone,
+}: {
+  length: number;
+  color: string;
+  hovered: boolean;
+  startFrame: number;
+  from: -1 | 1;
+  edgeId: string;
+  onDone: (id: string) => void;
+}) {
+  const frame = useAnimFrame();
+  const duration = motionMs(240);
+  const elapsed = Math.max(0, (frame - startFrame) * 83);
+  const reveal = Math.min(1, elapsed / duration);
+  const done = elapsed >= duration;
+  useEffect(() => {
+    if (done) onDone(edgeId);
+  }, [done, edgeId, onDone]);
+  return <DirtTrack length={length} color={color} ghost={false} hovered={hovered} reveal={reveal} from={from} />;
+}
+
+function FallingHouse({
+  startFrame,
+  vertexId,
+  onDone,
+  children,
+}: {
+  startFrame: number;
+  vertexId: string;
+  onDone: (id: string) => void;
+  children: ReactNode;
+}) {
+  const frame = useAnimFrame();
+  const duration = motionMs(180);
+  const elapsed = Math.max(0, (frame - startFrame) * 83);
+  const age = Math.min(1, elapsed / duration);
+  const done = elapsed >= duration;
+  useEffect(() => {
+    if (done) onDone(vertexId);
+  }, [done, vertexId, onDone]);
+  const step = Math.min(2, Math.floor(age * 3));
+  return (
+    <pixiContainer eventMode="none">
+      <pixiContainer y={Math.round(-6 * (1 - age))} eventMode="none">
+        {children}
+      </pixiContainer>
+      <DustPuff step={step} />
+    </pixiContainer>
+  );
+}
+
+function DustPuff({ step }: { step: number }) {
+  const draw = useCallback(
+    (g: PixiGraphics) => {
+      g.clear();
+      const spots = [
+        [
+          [-6, 2],
+          [5, 3],
+          [-2, 5],
+        ],
+        [
+          [-8, 4],
+          [7, 2],
+          [1, 6],
+        ],
+        [
+          [-4, 6],
+          [8, 5],
+          [3, 8],
+        ],
+      ][step];
+      if (!spots) return;
+      for (const [x, y] of spots) {
+        g.rect(x, y, 2, 2);
+        g.fill({ color: 0x7a5a38, alpha: step === 2 ? 0.4 : 0.85 });
+      }
+    },
+    [step],
+  );
+  return <pixiGraphics draw={draw} eventMode="none" />;
 }
 
 function FallbackHex({ terrain }: { terrain: string }) {
@@ -1088,17 +1238,15 @@ function NumberToken({
   y,
   value,
   texture,
-  hot,
 }: {
   x: number;
   y: number;
   value: number;
   texture?: Texture;
-  hot: boolean;
 }) {
   const red = value === 6 || value === 8;
   return (
-    <pixiContainer x={x} y={hot ? y - 2 : y} eventMode="none">
+    <pixiContainer x={x} y={y} eventMode="none">
       {texture ? (
         <pixiSprite texture={texture} anchor={0.5} scale={0.78} />
       ) : (
@@ -1133,16 +1281,14 @@ function FallbackToken() {
 const IslandPicture = memo(function IslandPicture({
   board,
   textures,
-  flash,
   origin,
 }: {
   board: Board;
   textures: Record<string, Texture> | null;
-  flash: Set<string>;
   origin: { x: number; y: number };
 }) {
   const ref = useRef<Container | null>(null);
-  const cacheKey = `${board.robberHexId}|${textures ? Object.keys(textures).length : 0}|${[...flash].join(",")}`;
+  const cacheKey = `${board.robberHexId}|${textures ? Object.keys(textures).length : 0}`;
   useEffect(() => {
     const container = ref.current;
     if (!container) return;
@@ -1194,7 +1340,6 @@ const IslandPicture = memo(function IslandPicture({
             y={Math.round(p.y + 2)}
             value={hex.number}
             texture={textures?.["/sprites/token.png"]}
-            hot={flash.has(hex.id)}
           />
         );
       })}

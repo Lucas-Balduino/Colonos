@@ -9,7 +9,7 @@ import type { Action, GameState, PlayerId, PublicView } from "../core/types.ts";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.tsx";
 import { Button } from "@/components/ui/button.tsx";
-import { sfx } from "./audio.ts";
+import type { EventBatch } from "./fx/batch.ts";
 
 export function GameScreen({
   state,
@@ -17,29 +17,37 @@ export function GameScreen({
   onAction,
   onLeave,
   hotseat,
+  events,
 }: {
   state: GameState;
   viewerId: PlayerId;
   onAction: (a: Action) => boolean | void;
   onLeave: () => void;
   hotseat?: boolean;
+  events: EventBatch;
 }) {
   const effectiveId = hotseat ? whoseTurn(state) : viewerId;
   const view = projectStateFor(state, effectiveId);
   const interactive = hotseat || whoseTurn(state) === viewerId;
-  return <TableLayout view={view} onAction={onAction} interactive={interactive} onLeave={onLeave} />;
+  return (
+    <TableLayout view={view} onAction={onAction} interactive={interactive} onLeave={onLeave} events={events} />
+  );
 }
+
+const EMPTY_EVENTS: EventBatch = { seq: 0, events: [] };
 
 export function TableLayout({
   view,
   onAction,
   interactive,
   onLeave,
+  events = EMPTY_EVENTS,
 }: {
   view: PublicView;
   onAction: (a: Action) => boolean | void;
   interactive: boolean;
   onLeave: () => void;
+  events?: EventBatch;
 }) {
   const [sheet, setSheet] = useState(false);
   const [buildOpen, setBuildOpen] = useState(false);
@@ -59,16 +67,6 @@ export function TableLayout({
   }, []);
 
   const dispatch = (a: Action) => {
-    if (
-      a.type === "PLACE_SETTLEMENT" ||
-      a.type === "PLACE_ROAD" ||
-      a.type === "BUILD_SETTLEMENT" ||
-      a.type === "BUILD_CITY" ||
-      a.type === "BUILD_ROAD" ||
-      a.type === "MOVE_ROBBER"
-    ) {
-      sfx("place");
-    }
     const result = onAction(a);
     if (
       result !== false &&
@@ -108,6 +106,7 @@ export function TableLayout({
           onPendingRobber={setPendingRobberHex}
           buildMode={buildMode}
           onClearBuild={() => setBuildMode(null)}
+          events={events}
         />
         <button type="button" className="wood-panel absolute top-3 left-3 z-10 px-3 py-1 text-xs" onClick={onLeave}>
           Sair
@@ -128,12 +127,13 @@ export function TableLayout({
               pendingRobberHex={pendingRobberHex}
               buildMode={buildMode}
               onBuildMode={chooseBuild}
+              events={events}
             />
           </SheetContent>
         </Sheet>
       </div>
       <div className="flex h-16 shrink-0 items-center gap-1 border-t-2 border-[#8a6410] bg-[#1a1520] px-1 md:hidden">
-        <ResourceStrip resources={resources} />
+        <ResourceStrip resources={resources} batch={events} viewerId={you?.id ?? null} />
         {primary ? (
           <Button className="h-11 min-w-0 flex-1 px-2 text-xs" onClick={primary.run}>
             {primary.label}
@@ -174,6 +174,7 @@ export function TableLayout({
           pendingRobberHex={pendingRobberHex}
           buildMode={buildMode}
           onBuildMode={chooseBuild}
+          events={events}
         />
       </div>
     </div>

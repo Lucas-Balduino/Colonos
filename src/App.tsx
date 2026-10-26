@@ -79,9 +79,16 @@ function LocalMatch({
   onLeave: () => void;
   initial?: GameState;
 }) {
-  const { state, dispatch } = useLocalGame(opts, viewerId, initial);
+  const { state, dispatch, events } = useLocalGame(opts, viewerId, initial);
   return (
-    <GameScreen state={state} viewerId={viewerId} onAction={dispatch} onLeave={onLeave} hotseat={hotseat} />
+    <GameScreen
+      state={state}
+      viewerId={viewerId}
+      onAction={dispatch}
+      onLeave={onLeave}
+      hotseat={hotseat}
+      events={events}
+    />
   );
 }
 
@@ -117,7 +124,9 @@ function NetMatch({
   }, []);
 
   if (net.view) {
-    return <TableLayout view={net.view} onAction={net.dispatch} interactive onLeave={onLeave} />;
+    return (
+      <TableLayout view={net.view} onAction={net.dispatch} interactive onLeave={onLeave} events={net.events} />
+    );
   }
 
   return (

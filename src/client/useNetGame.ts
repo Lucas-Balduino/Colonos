@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { Action, PublicView } from "../core/types.ts";
 import type { ClientMsg, ServerMsg } from "../protocol.ts";
+import type { EventBatch } from "./fx/batch.ts";
 
 function wsUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -11,6 +12,8 @@ function wsUrl(): string {
 export function useNetGame() {
   const wsRef = useRef<WebSocket | null>(null);
   const [view, setView] = useState<PublicView | null>(null);
+  const [events, setEvents] = useState<EventBatch>({ seq: 0, events: [] });
+  const seqRef = useRef(0);
   const [lobby, setLobby] = useState<{
     code: string;
     playerId: string;
@@ -51,7 +54,11 @@ export function useNetGame() {
             : prev,
         );
       }
-      if (msg.type === "view") setView(msg.view);
+      if (msg.type === "view") {
+        setView(msg.view);
+        seqRef.current += 1;
+        setEvents({ seq: seqRef.current, events: msg.events ?? [] });
+      }
     };
     return ws;
   }, []);
@@ -75,5 +82,5 @@ export function useNetGame() {
   const start = () => send({ type: "start" });
   const dispatch = (action: Action) => send({ type: "action", action });
 
-  return { view, lobby, connected, create, join, start, dispatch };
+  return { view, lobby, connected, create, join, start, dispatch, events };
 }
