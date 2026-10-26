@@ -6,18 +6,22 @@ import { RESOURCES, RESOURCE_LABEL, COSTS, countResources, emptyResources } from
 import type { Action, PublicView, Resource, ResourceMap } from "../core/types.ts";
 import { CARD_SPRITE, CHIP_SPRITE, diceSprite, settlementSprite } from "./assets.ts";
 import { sfx } from "./audio.ts";
-import { phaseCopy } from "./copy.ts";
+import type { BuildMode } from "./copy.ts";
 
 export function Hud({
   view,
   onAction,
   interactive,
   pendingRobberHex = null,
+  buildMode = null,
+  onBuildMode,
 }: {
   view: PublicView;
   onAction: (a: Action) => boolean | void;
   interactive: boolean;
   pendingRobberHex?: string | null;
+  buildMode?: BuildMode | null;
+  onBuildMode?: (mode: BuildMode) => void;
 }) {
   const you = view.players.find((p) => p.isYou);
   const yourTurn = Boolean(you && you.id === view.currentPlayerId);
@@ -91,9 +95,6 @@ export function Hud({
           </div>
           <DicePair faces={faces} rolling={rolling} empty={!view.dice && !rolling} />
         </div>
-        <p className="gold-ribbon mt-3 px-2 py-1 text-center text-xs">
-          {phaseCopy(view.phase, yourTurn && interactive)}
-        </p>
         {view.winnerId ? (
           <p className="bg-primary text-primary-foreground mt-2 px-2 py-1 text-center text-xs">
             Vitória: {view.players.find((p) => p.id === view.winnerId)?.name}
@@ -140,11 +141,39 @@ export function Hud({
       </div>
 
       <div className="wood-panel p-2">
-        <p className="mb-1 text-[10px] tracking-[0.2em] uppercase text-[#d4a017]">Custos</p>
-        <div className="space-y-1 text-[10px]">
-          <CostRow label="Estrada" parts={["wood", "brick"]} hand={you?.resources} />
-          <CostRow label="Aldeia" parts={["wood", "brick", "sheep", "wheat"]} hand={you?.resources} />
-          <CostRow label="Cidade" parts={["wheat", "wheat", "ore", "ore", "ore"]} hand={you?.resources} />
+        <p className="mb-1 text-[10px] tracking-[0.2em] uppercase text-[#d4a017]">Construir</p>
+        <div className="grid grid-cols-2 gap-1">
+          <BuildChoice
+            label="Estrada"
+            parts={["wood", "brick"]}
+            enabled={legal.some((a) => a.type === "BUILD_ROAD")}
+            pressed={buildMode === "road"}
+            onClick={() => onBuildMode?.("road")}
+          />
+          <BuildChoice
+            label="Aldeia"
+            parts={["wood", "brick", "sheep", "wheat"]}
+            enabled={legal.some((a) => a.type === "BUILD_SETTLEMENT")}
+            pressed={buildMode === "settlement"}
+            onClick={() => onBuildMode?.("settlement")}
+          />
+          <BuildChoice
+            label="Cidade"
+            parts={["wheat", "wheat", "ore", "ore", "ore"]}
+            enabled={legal.some((a) => a.type === "BUILD_CITY")}
+            pressed={buildMode === "city"}
+            onClick={() => onBuildMode?.("city")}
+          />
+          <BuildChoice
+            label="Carta"
+            parts={["sheep", "wheat", "ore"]}
+            enabled={legal.some((a) => a.type === "BUY_DEV")}
+            pressed={false}
+            onClick={() => {
+              const buy = legal.find((a) => a.type === "BUY_DEV");
+              if (buy) act(buy);
+            }}
+          />
         </div>
       </div>
 
@@ -425,32 +454,36 @@ export function Hud({
   );
 }
 
-function CostRow({
+function BuildChoice({
   label,
   parts,
-  hand,
+  enabled,
+  pressed,
+  onClick,
 }: {
   label: string;
   parts: Resource[];
-  hand?: ResourceMap | null;
+  enabled: boolean;
+  pressed: boolean;
+  onClick: () => void;
 }) {
-  const have = hand ?? { wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 };
-  const need: ResourceMap = { wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 };
-  for (const r of parts) need[r] += 1;
-  const ok = RESOURCES.every((r) => have[r] >= need[r]);
   return (
-    <div className={`flex items-center gap-1 ${ok ? "text-gold" : "text-muted-foreground"}`}>
-      <span className="w-12 shrink-0">{label}</span>
-      {parts.map((r, i) => (
-        <img
-          key={`${r}-${i}`}
-          src={CHIP_SPRITE[r]}
-          alt={RESOURCE_LABEL[r]}
-          className={`pixelated size-5 rounded-full ${have[r] >= need[r] ? "" : "opacity-35"}`}
-        />
-      ))}
-      {ok ? <span className="ml-1">pronta</span> : null}
-    </div>
+    <button
+      type="button"
+      disabled={!enabled}
+      aria-pressed={pressed}
+      onClick={onClick}
+      className={`pixel-btn flex items-center gap-1 px-1.5 py-1 text-left text-[11px] ${
+        pressed ? "bg-primary text-primary-foreground" : "bg-secondary"
+      } ${enabled ? "" : "opacity-40"}`}
+    >
+      <span className="shrink-0">{label}</span>
+      <span className="flex gap-0.5">
+        {parts.map((r, i) => (
+          <img key={`${r}-${i}`} src={CHIP_SPRITE[r]} alt="" className="pixelated size-4" />
+        ))}
+      </span>
+    </button>
   );
 }
 

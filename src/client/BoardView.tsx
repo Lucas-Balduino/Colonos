@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Application, extend, useTick } from "@pixi/react";
+import { LocateFixed, Minus, Plus } from "lucide-react";
 import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import type { Graphics as PixiGraphics } from "pixi.js";
 import { toast } from "sonner";
@@ -17,7 +18,7 @@ import {
 } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import { FACTION_HEX, PALETTE } from "./theme.ts";
-import { phaseCopy } from "./copy.ts";
+import { buildModeCopy, phaseCopy, type BuildMode } from "./copy.ts";
 import { preloadSprites } from "./preload.ts";
 
 extend({ Container, Graphics, Sprite, Text });
@@ -120,11 +121,15 @@ export function BoardView({
   onAction,
   interactive,
   onPendingRobber,
+  buildMode = null,
+  onClearBuild,
 }: {
   view: PublicView;
   onAction: (a: Action) => boolean | void;
   interactive: boolean;
   onPendingRobber?: (hexId: string | null) => void;
+  buildMode?: BuildMode | null;
+  onClearBuild?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const { map: textures, progress } = useTextures();
@@ -191,27 +196,31 @@ export function BoardView({
     return () => cancelAnimationFrame(raf);
   }, [shakeUntil]);
 
+  const placing = view.phase.type === "main";
   const settleTargets = useMemo(() => {
     const ids = new Set<string>();
+    if (placing && buildMode !== "settlement") return ids;
     for (const a of legal) {
       if (a.type === "PLACE_SETTLEMENT" || a.type === "BUILD_SETTLEMENT") ids.add(a.vertexId);
     }
     return ids;
-  }, [legal]);
+  }, [legal, placing, buildMode]);
 
   const cityTargets = useMemo(() => {
     const ids = new Set<string>();
+    if (placing && buildMode !== "city") return ids;
     for (const a of legal) if (a.type === "BUILD_CITY") ids.add(a.vertexId);
     return ids;
-  }, [legal]);
+  }, [legal, placing, buildMode]);
 
   const roadTargets = useMemo(() => {
     const ids = new Set<string>();
+    if (placing && buildMode !== "road") return ids;
     for (const a of legal) {
       if (a.type === "PLACE_ROAD" || a.type === "BUILD_ROAD") ids.add(a.edgeId);
     }
     return ids;
-  }, [legal]);
+  }, [legal, placing, buildMode]);
 
   const robberTargets = useMemo(() => {
     const map = new Map<string, Action>();
@@ -299,7 +308,7 @@ export function BoardView({
       if (h.number === sum && view.board.robberHexId !== h.id) hit.add(h.id);
     }
     setFlash(hit);
-    const t = window.setTimeout(() => setFlash(new Set()), 720);
+    const t = window.setTimeout(() => setFlash(new Set()), 600);
     return () => window.clearTimeout(t);
   }, [view.dice, view.board]);
 
@@ -521,6 +530,10 @@ export function BoardView({
         if (!drag.current) setHover(null);
         setTipAt(null);
       }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onClearBuild?.();
+      }}
     >
       <Application resizeTo={host} background={0x0c2433} antialias={false} roundPixels preference="webgl">
         <pixiContainer x={size.w / 2 + pan.x + nudge} y={size.h / 2 + pan.y} scale={zoom}>
@@ -547,7 +560,6 @@ export function BoardView({
               const url = TERRAIN_SPRITE[hex.terrain];
               const tex = url ? textures?.[url] : undefined;
               const canRob = robberTargets.has(hex.id);
-              const lit = flash.has(hex.id);
               return (
                 <pixiContainer key={hex.id} x={p.x} y={p.y} eventMode="none">
                   {tex ? (
@@ -555,8 +567,10 @@ export function BoardView({
                   ) : (
                     <FallbackHex terrain={hex.terrain} />
                   )}
-                  {lit ? <HarvestGlow /> : null}
-                  {canRob ? <RobberTarget /> : null}
+                  {hover?.kind === "hex" && hover.id === hex.id && canRob ? <RobberShade /> : null}
+                  {hover?.kind === "hex" && hover.id === hex.id && canRob ? (
+                    <RobberSprite x={0} y={-4} textures={textures} alpha={0.5} />
+                  ) : null}
                 </pixiContainer>
               );
             })}
@@ -568,7 +582,7 @@ export function BoardView({
                 <NumberToken
                   key={`tok-${hex.id}`}
                   x={p.x}
-                  y={p.y + 2}
+                  y={Math.round(p.y + 2)}
                   value={hex.number}
                   texture={textures?.["/sprites/token.png"]}
                   hot={flash.has(hex.id)}
@@ -636,36 +650,32 @@ export function BoardView({
               const hot = settleTargets.has(v.id) || cityTargets.has(v.id);
               const hovered = hover?.kind === "vertex" && hover.id === v.id;
               const ghost = hot && !v.building;
+              const cityPick = cityTargets.has(v.id);
+              const previewCity = cityPick && hovered;
               const color = owner?.color ?? youColor;
-              const kind = v.building?.type ?? (cityTargets.has(v.id) ? "city" : "settlement");
+              const kind = previewCity ? "city" : (v.building?.type ?? "settlement");
               const url = kind === "city" ? citySprite(color) : settlementSprite(color);
               const tex = textures?.[url];
-              const ghostTex =
-                textures?.[kind === "city" ? "/sprites/city-ghost.png" : "/sprites/settlement-ghost.png"];
               const born = pops[v.id];
               const age = born ? Math.min(1, (performance.now() - born) / 180) : 1;
-              const popScale = born ? 0.7 + age * 0.3 : 1;
+              const popScale = v.building && born ? 0.7 + age * 0.3 : 1;
               return (
                 <pixiContainer
                   key={v.id}
                   x={p.x}
                   y={p.y}
-                  scale={hovered && ghost ? 1.06 : popScale * 0.82}
+                  scale={popScale * 0.82}
                   eventMode="none"
                 >
                   {ghost || v.building ? <VertexPad /> : null}
-                  {ghost ? <PulseDot /> : null}
-                  {ghost && !hovered && ghostTex ? (
+                  {(ghost || cityPick) && !hovered ? <SurveyStakes color={color} /> : null}
+                  {((ghost && hovered) || (v.building && !previewCity) || previewCity) && tex ? (
                     <pixiSprite
-                      texture={ghostTex}
+                      texture={tex}
                       anchor={{ x: 0.5, y: 0.9 }}
-                      scale={0.7}
-                      alpha={0.55}
+                      alpha={ghost || previewCity ? 0.65 : 1}
                       eventMode="none"
                     />
-                  ) : null}
-                  {((ghost && hovered) || v.building) && tex ? (
-                    <pixiSprite texture={tex} anchor={{ x: 0.5, y: 0.9 }} eventMode="none" />
                   ) : null}
                 </pixiContainer>
               );
@@ -682,33 +692,45 @@ export function BoardView({
           </pixiContainer>
         </pixiContainer>
       </Application>
-      <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center px-14">
-        <div className="wood-panel pointer-events-auto flex max-w-[min(100%,42rem)] items-center gap-2 px-3 py-1.5 text-[11px]">
-          <span className="text-gold tracking-[0.2em] uppercase">Zoom</span>
-          {[1, 2, 3].map((z) => (
-            <button
-              key={z}
-              type="button"
-              className={`pixel-btn min-w-8 px-2 py-0.5 ${zoom === z ? "bg-primary text-primary-foreground" : "bg-secondary"}`}
-              onClick={() => {
-                setZoom(z);
-                if (z === 1) setPan({ x: 0, y: 0 });
-              }}
-            >
-              {z}x
-            </button>
-          ))}
-          <button type="button" className="pixel-btn bg-secondary px-2 py-0.5" onClick={() => setPan({ x: 0, y: 0 })}>
-            Centrar
-          </button>
-          <span className="bg-gold/20 text-parchment ml-1 hidden truncate px-2 py-0.5 sm:inline">{hint}</span>
-        </div>
+      <div className="absolute right-3 bottom-3 z-10 flex flex-col gap-1">
+        <button
+          type="button"
+          aria-label="+"
+          className="pixel-btn bg-secondary grid size-8 place-items-center"
+          onClick={() => setZoom((z) => Math.min(3, z + 1))}
+        >
+          <Plus className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="−"
+          className="pixel-btn bg-secondary grid size-8 place-items-center"
+          onClick={() => setZoom((z) => Math.max(1, z - 1))}
+        >
+          <Minus className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="Centralizar"
+          className="pixel-btn bg-secondary grid size-8 place-items-center"
+          onClick={() => {
+            setZoom(1);
+            setPan({ x: 0, y: 0 });
+          }}
+        >
+          <LocateFixed className="size-4" />
+        </button>
       </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-4 md:bottom-5">
+      <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-16">
         <p className="wood-panel text-parchment max-w-[36rem] px-3 py-1.5 text-center text-xs">
           {pendingRobberHex
             ? "Escolha de quem roubar: toque numa casa vizinha ao ladrão."
-            : phaseCopy(view.phase, yourTurn && interactive)}
+            : buildMode
+              ? buildModeCopy(buildMode)
+              : phaseCopy(view.phase, yourTurn && interactive)}
+          {settleTargets.size + cityTargets.size + roadTargets.size + robberTargets.size > 0 ? (
+            <span className="mt-0.5 block">{hint}</span>
+          ) : null}
         </p>
       </div>
       {hover?.kind === "port" && tipAt ? (
@@ -733,10 +755,10 @@ function boardHint(
 ): string {
   if (view.winnerId) return "A ilha tem um vencedor.";
   if (robbers) return "Clique num terreno para pousar o ladrão.";
-  if (settles) return "Os pontos dourados marcam onde fundar uma aldeia.";
-  if (cities) return "Troque a aldeia por uma cidadela.";
-  if (roads) return "Toque no rasto de terra junto da aldeia.";
-  return "Arraste o mapa. A roda do rato aproxima.";
+  if (settles) return "As estacas marcam onde fundar uma aldeia.";
+  if (cities) return "Transforme a aldeia em cidade.";
+  if (roads) return "Toque no rastro de terra junto da aldeia.";
+  return "Arraste o mapa. A roda do mouse aproxima.";
 }
 
 function portHint(port: Board["ports"][number] | undefined): string {
@@ -948,7 +970,7 @@ function NumberToken({
 }) {
   const red = value === 6 || value === 8;
   return (
-    <pixiContainer x={x} y={y} eventMode="none" scale={hot ? 1.08 : 1}>
+    <pixiContainer x={x} y={hot ? y - 2 : y} eventMode="none">
       {texture ? (
         <pixiSprite texture={texture} anchor={0.5} scale={0.78} />
       ) : (
@@ -980,53 +1002,36 @@ function FallbackToken() {
   return <pixiGraphics draw={draw} />;
 }
 
-function PulseDot() {
-  const [t, setT] = useState(0);
-  useTick(() => setT(performance.now()));
+function SurveyStakes({ color }: { color: string }) {
   const draw = useCallback(
     (g: PixiGraphics) => {
-      const s = Math.sin(t / 220);
+      const mark = FACTION_HEX[color] ?? 0xe8e0d0;
       g.clear();
-      g.circle(0, 2, 5 + s * 1.2);
-      g.fill({ color: PALETTE.gold, alpha: 0.28 + s * 0.14 });
-      g.circle(0, 2, 3);
-      g.fill({ color: PALETTE.parchment });
-    },
-    [t],
-  );
-  return <pixiGraphics draw={draw} />;
-}
-
-function RobberTarget() {
-  const [t, setT] = useState(0);
-  useTick(() => setT(performance.now()));
-  const draw = useCallback(
-    (g: PixiGraphics) => {
-      const s = Math.sin(t / 240);
-      g.clear();
-      const pts: number[] = [];
-      for (let i = 0; i < 6; i++) {
-        const c = hexCorner({ x: 0, y: 0 }, HEX_SIZE - 6 + s * 3, i);
-        pts.push(c.x, c.y);
+      for (const x of [-4, 4]) {
+        g.rect(x, -6, 1, 5);
+        g.fill({ color: 0x3a2818 });
+        g.rect(x, -6, 1, 2);
+        g.fill({ color: mark });
       }
-      g.poly(pts);
-      g.stroke({ width: 2, color: PALETTE.gold, alpha: 0.5 + s * 0.3 });
+      g.moveTo(-4, -6);
+      g.lineTo(4, -6);
+      g.stroke({ width: 1, color: 0xf4e8c8, alpha: 0.5 });
     },
-    [t],
+    [color],
   );
-  return <pixiGraphics draw={draw} />;
+  return <pixiGraphics draw={draw} alpha={0.55} />;
 }
 
-function HarvestGlow() {
+function RobberShade() {
   const draw = useCallback((g: PixiGraphics) => {
     g.clear();
     const pts: number[] = [];
     for (let i = 0; i < 6; i++) {
-      const c = hexCorner({ x: 0, y: 0 }, HEX_SIZE - 4, i);
+      const c = hexCorner({ x: 0, y: 0 }, HEX_SIZE - 1, i);
       pts.push(c.x, c.y);
     }
     g.poly(pts);
-    g.fill({ color: PALETTE.gold, alpha: 0.28 });
+    g.fill({ color: 0x071018, alpha: 0.25 });
   }, []);
   return <pixiGraphics draw={draw} />;
 }

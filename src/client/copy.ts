@@ -1,5 +1,13 @@
 import type { Phase } from "../core/types.ts";
 
+export type BuildMode = "road" | "settlement" | "city";
+
+export function buildModeCopy(mode: BuildMode): string {
+  if (mode === "road") return "Escolha onde abrir a estrada.";
+  if (mode === "settlement") return "Escolha onde fundar a aldeia.";
+  return "Escolha qual aldeia vira cidade.";
+}
+
 export const RESOURCE_SHORT: Record<string, string> = {
   wood: "MA",
   brick: "TI",

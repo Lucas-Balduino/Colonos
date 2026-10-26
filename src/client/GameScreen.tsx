@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BoardView } from "./BoardView.tsx";
+import type { BuildMode } from "./copy.ts";
 import { Hud } from "./Hud.tsx";
 import { projectStateFor } from "../core/view.ts";
 import { whoseTurn } from "../ai/bot.ts";
@@ -40,6 +41,19 @@ export function TableLayout({
 }) {
   const [sheet, setSheet] = useState(false);
   const [pendingRobberHex, setPendingRobberHex] = useState<string | null>(null);
+  const [buildMode, setBuildMode] = useState<BuildMode | null>(null);
+
+  useEffect(() => {
+    setBuildMode(null);
+  }, [view.phase]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setBuildMode(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const dispatch = (a: Action) => {
     if (
@@ -52,8 +66,21 @@ export function TableLayout({
     ) {
       sfx("place");
     }
-    return onAction(a);
+    const result = onAction(a);
+    if (
+      result !== false &&
+      (a.type === "BUILD_ROAD" ||
+        a.type === "BUILD_SETTLEMENT" ||
+        a.type === "BUILD_CITY" ||
+        a.type === "PLACE_ROAD" ||
+        a.type === "PLACE_SETTLEMENT")
+    ) {
+      setBuildMode(null);
+    }
+    return result;
   };
+
+  const chooseBuild = (mode: BuildMode) => setBuildMode((prev) => (prev === mode ? null : mode));
 
   return (
     <div className="flex min-h-dvh flex-col bg-[#0a1c26] md:flex-row">
@@ -63,6 +90,8 @@ export function TableLayout({
           onAction={dispatch}
           interactive={interactive}
           onPendingRobber={setPendingRobberHex}
+          buildMode={buildMode}
+          onClearBuild={() => setBuildMode(null)}
         />
         <button type="button" className="wood-panel absolute top-3 left-3 z-10 px-3 py-1 text-xs" onClick={onLeave}>
           Sair
@@ -80,13 +109,27 @@ export function TableLayout({
               <SheetHeader className="sr-only">
                 <SheetTitle>Ações da mesa</SheetTitle>
               </SheetHeader>
-              <Hud view={view} onAction={dispatch} interactive={interactive} pendingRobberHex={pendingRobberHex} />
+              <Hud
+                view={view}
+                onAction={dispatch}
+                interactive={interactive}
+                pendingRobberHex={pendingRobberHex}
+                buildMode={buildMode}
+                onBuildMode={chooseBuild}
+              />
             </SheetContent>
           </Sheet>
         </div>
       </div>
       <div className="wood-dock hidden md:flex md:h-dvh">
-        <Hud view={view} onAction={dispatch} interactive={interactive} pendingRobberHex={pendingRobberHex} />
+        <Hud
+          view={view}
+          onAction={dispatch}
+          interactive={interactive}
+          pendingRobberHex={pendingRobberHex}
+          buildMode={buildMode}
+          onBuildMode={chooseBuild}
+        />
       </div>
     </div>
   );
