@@ -26,17 +26,19 @@ import {
   robberVictims,
 } from "./rules.ts";
 import { refreshAwards } from "./scoring.ts";
-import type {
-  Action,
-  CreateGameOptions,
-  DevCardType,
-  GameEvent,
-  GameState,
-  Player,
-  PlayerId,
-  ReduceResult,
-  Resource,
-  ResourceMap,
+import {
+  RESOURCES,
+  type Action,
+  type CreateGameOptions,
+  type DevCardType,
+  type GameEvent,
+  type GameState,
+  type Player,
+  type PlayerId,
+  type ReduceResult,
+  type Resource,
+  type ResourceMap,
+  type TradeResponse,
 } from "./types.ts";
 
 const COLORS = ["#c44536", "#2b6cb0", "#d97706", "#e8e0d0"];
@@ -62,6 +64,22 @@ function takeFromBank(state: GameState, player: Player, gain: Partial<ResourceMa
 
 function recurso(resource: Resource): string {
   return RESOURCE_LABEL[resource].toLowerCase();
+}
+
+function listaRecursos(map: ResourceMap): string {
+  const parts = RESOURCES.filter((resource) => map[resource] > 0).map(
+    (resource) => `${map[resource]} ${recurso(resource)}`,
+  );
+  if (parts.length <= 1) return parts[0] ?? "nada";
+  return `${parts.slice(0, -1).join(", ")} e ${parts[parts.length - 1]}`;
+}
+
+function freshResponses(state: GameState, from: PlayerId): Record<PlayerId, TradeResponse> {
+  const responses: Record<PlayerId, TradeResponse> = {};
+  for (const player of state.players) {
+    if (player.id !== from) responses[player.id] = "pending";
+  }
+  return responses;
 }
 
 let pendingEvents: GameEvent[] = [];
@@ -409,12 +427,19 @@ function apply(state: GameState, action: Action): void {
     case "OFFER_TRADE": {
       const p = assertCurrent(state, action.playerId);
       if (state.phase.type !== "main") throw new RuleError("phase", "Trocas só no turno principal.");
+      if (state.tradeOffers.length > 0) throw new RuleError("offer-open", "Já existe uma oferta aberta.");
       if (countResources(action.give) === 0 || countResources(action.want) === 0) {
         throw new RuleError("empty-trade", "A oferta precisa dar e pedir algo.");
       }
       if (!hasAtLeast(p.resources, action.give)) throw new RuleError("cannot-afford", "Você não tem o que oferece.");
-      const id = `t${state.log.length}-${p.id}`;
-      state.tradeOffers.push({ id, from: p.id, give: cloneResources(action.give), want: cloneResources(action.want) });
+      const id = `t${state.offerSeq++}`;
+      state.tradeOffers.push({
+        id,
+        from: p.id,
+        give: cloneResources(action.give),
+        want: cloneResources(action.want),
+        responses: freshResponses(state, p.id),
+      });
       log(state, `${p.name} ofereceu uma troca.`, p.id);
       return;
     }
@@ -423,10 +448,19 @@ function apply(state: GameState, action: Action): void {
       const offer = state.tradeOffers.find((o) => o.id === action.offerId);
       if (!offer) throw new RuleError("no-offer", "Oferta inexistente.");
       if (offer.from === action.playerId) throw new RuleError("self-trade", "Não aceite a própria oferta.");
+      const response = offer.responses[action.playerId];
+      if (response === "rejected") throw new RuleError("already-answered", "Essa troca já foi recusada.");
+      if (response !== "pending" && response !== "accepted") {
+        throw new RuleError("already-answered", "Essa resposta já foi dada.");
+      }
       const other = playerById(state, action.playerId);
       const owner = playerById(state, offer.from);
       if (!hasAtLeast(owner.resources, offer.give) || !hasAtLeast(other.resources, offer.want)) {
         throw new RuleError("cannot-afford", "Alguém já não tem os recursos da troca.");
+      }
+      if (response === "pending") {
+        offer.responses[action.playerId] = "accepted";
+        return;
       }
       subFrom(owner.resources, offer.give);
       addTo(other.resources, offer.give);
@@ -440,17 +474,28 @@ function apply(state: GameState, action: Action): void {
         take: cloneResources(offer.want),
       });
       state.tradeOffers = state.tradeOffers.filter((o) => o.id !== offer.id);
-      log(state, `${other.name} aceitou a troca de ${owner.name}.`, other.id);
+      log(state, `${owner.name} trocou ${listaRecursos(offer.give)} por ${listaRecursos(offer.want)} com ${other.name}.`, owner.id);
       return;
     }
-    case "REJECT_TRADE":
+    case "REJECT_TRADE": {
+      const offer = state.tradeOffers.find((o) => o.id === action.offerId);
+      if (!offer) throw new RuleError("no-offer", "Oferta inexistente.");
+      if (offer.from === action.playerId) throw new RuleError("self-trade", "Quem ofereceu não recusa a própria oferta.");
+      if (offer.responses[action.playerId] !== "pending") {
+        throw new RuleError("already-answered", "Essa resposta já foi dada.");
+      }
+      offer.responses[action.playerId] = "rejected";
+      const waiting = state.players.filter((player) => player.id !== offer.from);
+      if (waiting.every((player) => offer.responses[player.id] === "rejected")) {
+        state.tradeOffers = state.tradeOffers.filter((item) => item.id !== offer.id);
+      }
+      return;
+    }
     case "CANCEL_TRADE": {
       const offer = state.tradeOffers.find((o) => o.id === action.offerId);
       if (!offer) throw new RuleError("no-offer", "Oferta inexistente.");
-      if (action.type === "CANCEL_TRADE" && offer.from !== action.playerId) {
-        throw new RuleError("not-yours", "Só quem ofereceu pode cancelar.");
-      }
-      state.tradeOffers = state.tradeOffers.filter((o) => o.id !== action.offerId);
+      if (offer.from !== action.playerId) throw new RuleError("not-yours", "Só quem ofereceu pode cancelar.");
+      state.tradeOffers = state.tradeOffers.filter((item) => item.from !== action.playerId);
       return;
     }
     case "BUILD_SETTLEMENT": {
@@ -567,6 +612,7 @@ function apply(state: GameState, action: Action): void {
       const p = assertCurrent(state, action.playerId);
       if (state.phase.type !== "main") throw new RuleError("phase", "Termine o turno só na fase principal.");
       log(state, `${p.name} passou o turno.`, p.id);
+      state.tradeOffers = state.tradeOffers.filter((offer) => offer.from !== p.id);
       nextTurn(state);
       return;
     }
@@ -657,6 +703,7 @@ export function createGame(opts: CreateGameOptions): GameState {
     bank: fullBank(19),
     devDeck: deck.deck,
     tradeOffers: [],
+    offerSeq: 0,
     longestRoadPlayerId: null,
     largestArmyPlayerId: null,
     turnNumber: 0,

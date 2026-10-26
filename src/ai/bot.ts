@@ -1,6 +1,6 @@
 import { legalActions } from "../core/legal.ts";
 import { RESOURCES } from "../core/types.ts";
-import type { Action, GameState, Player, PlayerId, Resource } from "../core/types.ts";
+import type { Action, GameState, Player, PlayerId, Resource, TradeOffer } from "../core/types.ts";
 import { countResources } from "../core/resources.ts";
 import { totalVictoryPoints } from "../core/scoring.ts";
 import { currentPlayer } from "../core/rules.ts";
@@ -66,29 +66,62 @@ function missingFor(player: Player, kind: "city" | "settlement" | "dev" | "road"
   return miss;
 }
 
+export function botTradeResponse(state: GameState, botId: PlayerId, offer: TradeOffer): "accept" | "reject" {
+  const player = state.players.find((p) => p.id === botId);
+  if (!player || offer.from === botId) return "reject";
+  const after = { ...player.resources };
+  for (const resource of RESOURCES) {
+    after[resource] += offer.give[resource] - offer.want[resource];
+    if (after[resource] < 0) return "reject";
+  }
+  const fake = { ...player, resources: after };
+  const helpsCity = missingFor(fake, "city") < missingFor(player, "city");
+  const helpsSettlement = missingFor(fake, "settlement") < missingFor(player, "settlement");
+  if (!helpsCity && !helpsSettlement) return "reject";
+  if (missingFor(player, "city") === 0) {
+    const givesLastWheat = offer.want.wheat > 0 && after.wheat < 1;
+    const givesLastOre = offer.want.ore > 0 && after.ore < 1;
+    if (givesLastWheat || givesLastOre) return "reject";
+  }
+  return "accept";
+}
+
+function tradeReply(state: GameState, playerId: PlayerId): Action | null {
+  for (const offer of state.tradeOffers) {
+    if (offer.from === playerId) continue;
+    const response = offer.responses[playerId];
+    if (response === "accepted") return { type: "ACCEPT_TRADE", playerId, offerId: offer.id };
+    if (response !== "pending") continue;
+    if (botTradeResponse(state, playerId, offer) === "accept") {
+      return { type: "ACCEPT_TRADE", playerId, offerId: offer.id };
+    }
+    return { type: "REJECT_TRADE", playerId, offerId: offer.id };
+  }
+  return null;
+}
+
+export function pendingBotTrades(state: GameState): Action[] {
+  if (state.phase.type !== "main") return [];
+  const actions: Action[] = [];
+  for (const player of state.players) {
+    if (!player.isBot) continue;
+    const reply = tradeReply(state, player.id);
+    if (reply) actions.push(reply);
+  }
+  return actions;
+}
+
+export function botTradeDelayMs(): number {
+  return 600 + Math.floor(Math.random() * 601);
+}
+
 export function chooseBotAction(state: GameState, playerId: PlayerId): Action | null {
   const legal = legalActions(state, playerId);
   if (legal.length === 0) return null;
   const player = state.players.find((p) => p.id === playerId);
   if (!player) return legal[0]!;
   const onTurn = whoseTurn(state) === playerId;
-  if (!onTurn) {
-    const offers = legal.filter((a) => a.type === "ACCEPT_TRADE");
-    for (const o of offers) {
-      if (o.type !== "ACCEPT_TRADE") continue;
-      const offer = state.tradeOffers.find((t) => t.id === o.offerId);
-      if (!offer) continue;
-      const after = { ...player.resources };
-      for (const r of RESOURCES) {
-        after[r] += offer.give[r];
-        after[r] -= offer.want[r];
-      }
-      const fake = { ...player, resources: after };
-      if (missingFor(fake, "city") < missingFor(player, "city")) return o;
-      if (missingFor(fake, "settlement") < missingFor(player, "settlement")) return o;
-    }
-    return legal.find((a) => a.type === "REJECT_TRADE") ?? null;
-  }
+  if (!onTurn) return tradeReply(state, playerId);
 
   if (state.phase.type === "setupSettlement") {
     const opts = legal.filter((a) => a.type === "PLACE_SETTLEMENT");
@@ -161,21 +194,6 @@ export function chooseBotAction(state: GameState, playerId: PlayerId): Action | 
       return vertexScore(state, b.vertexId) - vertexScore(state, a.vertexId);
     });
     return settles[0]!;
-  }
-
-  const offers = legal.filter((a) => a.type === "ACCEPT_TRADE");
-  for (const o of offers) {
-    if (o.type !== "ACCEPT_TRADE") continue;
-    const offer = state.tradeOffers.find((t) => t.id === o.offerId);
-    if (!offer) continue;
-    const after = { ...player.resources };
-    for (const r of RESOURCES) {
-      after[r] += offer.give[r];
-      after[r] -= offer.want[r];
-    }
-    const fake = { ...player, resources: after };
-    if (missingFor(fake, "city") < missingFor(player, "city")) return o;
-    if (missingFor(fake, "settlement") < missingFor(player, "settlement")) return o;
   }
 
   if (missingFor(player, "city") === 0 || missingFor(player, "settlement") === 0) {

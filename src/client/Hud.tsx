@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog.tsx";
 import { ScrollArea } from "@/components/ui/scroll-area.tsx";
-import { RESOURCES, RESOURCE_LABEL, COSTS, countResources, emptyResources } from "../core/index.ts";
-import type { Action, PublicView, Resource, ResourceMap } from "../core/types.ts";
+import { RESOURCES, RESOURCE_LABEL, countResources, emptyResources } from "../core/index.ts";
+import type { Action, PublicView, Resource, ResourceMap, TradeOffer } from "../core/types.ts";
 import { CARD_SPRITE, CHIP_SPRITE, diceSprite, settlementSprite } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import type { BuildMode } from "./copy.ts";
@@ -30,7 +30,6 @@ export function Hud({
   const you = view.players.find((p) => p.isYou);
   const yourTurn = Boolean(you && you.id === view.currentPlayerId);
   const legal = view.legal;
-  const [give, setGive] = useState<Resource | null>(null);
   const [discard, setDiscard] = useState<ResourceMap>(emptyResources());
   const [plentyOpen, setPlentyOpen] = useState(false);
   const [plentySlots, setPlentySlots] = useState<Array<Resource | null>>([null, null]);
@@ -61,7 +60,7 @@ export function Hud({
   const others = view.players.filter((p) => p.id !== view.currentPlayerId);
 
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden p-3 md:w-[340px] md:shrink-0">
+    <aside className="flex h-full min-h-0 w-full flex-col gap-3 overflow-y-auto p-3 md:w-[340px] md:shrink-0">
       <div className="wood-panel p-3">
         <div className="flex items-start justify-between gap-2">
           <div>
@@ -78,6 +77,10 @@ export function Hud({
           <p className="text-muted-foreground mt-2 text-center text-[11px]">Turno {view.turnNumber || 0}</p>
         )}
       </div>
+
+      {view.phase.type === "main" && you ? (
+        <TradePanel view={view} youId={you.id} resources={you.resources} legal={legal} onAction={act} />
+      ) : null}
 
       {current ? (
         <PlayerPlaque
@@ -128,18 +131,13 @@ export function Hud({
           <div className="flex gap-1.5 overflow-x-auto pb-1">
             {RESOURCES.map((r) => {
               const n = shown[r];
-              const selected = give === r;
-              const inCost =
-                (view.phase.type === "main" && yourTurn && (COSTS.road[r] || COSTS.settlement[r] || COSTS.city[r])) ??
-                false;
               return (
                 <button
                   key={r}
                   type="button"
-                  className={`resource-card ${selected ? "resource-card-on" : ""} ${n === 0 ? "opacity-55" : ""}`}
+                  className={`resource-card ${n === 0 ? "opacity-55" : ""}`}
                   onClick={() => {
                     if (discardNeed) tapDiscard(r);
-                    else setGive(give === r ? null : r);
                   }}
                 >
                   <img src={CARD_SPRITE[r]} alt="" className="pixelated h-[4.6rem] w-[2.15rem] object-cover" />
@@ -147,16 +145,10 @@ export function Hud({
                   <span className="mt-1 text-[9px] leading-none uppercase">{RESOURCE_LABEL[r]}</span>
                   {you.bankRatios ? <span className="text-[9px] text-[#d4a017]">{you.bankRatios[r]}:1</span> : null}
                   {discardNeed ? <span className="text-[9px] text-[#8a6410]">-{discard[r]}</span> : null}
-                  {inCost && n > 0 ? <span className="sr-only">usado nas construções</span> : null}
                 </button>
               );
             })}
           </div>
-          {give ? (
-            <p className="text-gold mt-2 text-[10px]">Toque de novo para cancelar. Ofereça {RESOURCE_LABEL[give]} ao banco.</p>
-          ) : (
-            <p className="text-muted-foreground mt-2 text-[10px]">Toque numa carta para negociar com o banco.</p>
-          )}
         </div>
       ) : null}
 
@@ -267,40 +259,6 @@ export function Hud({
                 </Button>
               ) : null,
             )}
-        </div>
-      ) : null}
-
-      {yourTurn && view.phase.type === "main" && you && give ? (
-        <div className="wood-panel p-3 text-xs">
-          <p className="mb-1">Banco: oferecer {RESOURCE_LABEL[give]}</p>
-          <div className="flex flex-wrap gap-1">
-            {legal
-              .filter((a) => a.type === "TRADE_BANK" && a.give === give)
-              .map((a) =>
-                a.type === "TRADE_BANK" ? (
-                  <Button key={a.take} size="sm" onClick={() => act(a)}>
-                    Por {RESOURCE_LABEL[a.take]}
-                  </Button>
-                ) : null,
-              )}
-          </div>
-        </div>
-      ) : null}
-
-      {view.tradeOffers.length > 0 ? (
-        <div className="space-y-1 text-xs">
-          {view.tradeOffers.map((o) => (
-            <div key={o.id} className="wood-panel flex items-center justify-between gap-2 px-2 py-1">
-              <span>
-                {view.players.find((p) => p.id === o.from)?.name} oferece {fmt(o.give)} por {fmt(o.want)}
-              </span>
-              {you && o.from !== you.id ? (
-                <Button size="sm" onClick={() => act({ type: "ACCEPT_TRADE", playerId: you.id, offerId: o.id })}>
-                  Aceitar
-                </Button>
-              ) : null}
-            </div>
-          ))}
         </div>
       ) : null}
 
@@ -597,9 +555,214 @@ function plentyAction(legal: Action[], slots: Array<Resource | null>): Action | 
   );
 }
 
+function TradePanel({
+  view,
+  youId,
+  resources,
+  legal,
+  onAction,
+}: {
+  view: PublicView;
+  youId: string;
+  resources?: ResourceMap;
+  legal: Action[];
+  onAction: (action: Action) => void;
+}) {
+  const [tab, setTab] = useState<"mesa" | "banco">("mesa");
+  const [give, setGive] = useState<ResourceMap>(emptyResources());
+  const [want, setWant] = useState<ResourceMap>(emptyResources());
+  const hand = resources ?? emptyResources();
+  const yourTurn = view.currentPlayerId === youId && view.phase.type === "main";
+  const emptySide = countResources(give) === 0 || countResources(want) === 0;
+  const lacksCards = RESOURCES.some((resource) => give[resource] > hand[resource]);
+  const you = view.players.find((player) => player.id === youId);
+
+  return (
+    <div id="trocar" className="wood-panel space-y-2 p-2">
+      <div className="flex items-center gap-1">
+        <p className="mr-auto text-[10px] tracking-[0.2em] text-[#d4a017] uppercase">Trocar</p>
+        <button type="button" className={tradeTabClass(tab === "mesa")} onClick={() => setTab("mesa")}>
+          Mesa
+        </button>
+        <button type="button" className={tradeTabClass(tab === "banco")} onClick={() => setTab("banco")}>
+          Banco
+        </button>
+      </div>
+      {tab === "mesa" ? (
+        <>
+          <TradeStepper label="Você dá" value={give} cap={hand} onChange={setGive} />
+          <TradeStepper label="Você quer" value={want} onChange={setWant} />
+          <Button
+            className="h-8 w-full text-xs"
+            disabled={!yourTurn || view.tradeOffers.length > 0 || emptySide || lacksCards}
+            onClick={() => onAction({ type: "OFFER_TRADE", playerId: youId, give, want })}
+          >
+            Oferecer à mesa
+          </Button>
+          <OfferBoard view={view} youId={youId} onAction={onAction} />
+        </>
+      ) : (
+        <div className="space-y-1">
+          {RESOURCES.map((resource) => (
+            <div key={resource} className="flex flex-wrap items-center gap-1">
+              <span className="w-16 text-[10px] uppercase">{RESOURCE_LABEL[resource]}</span>
+              <span className="text-[10px] text-[#d4a017]">{you?.bankRatios ? `${you.bankRatios[resource]}:1` : ""}</span>
+              {legal
+                .filter((action) => action.type === "TRADE_BANK" && action.give === resource)
+                .map((action) =>
+                  action.type === "TRADE_BANK" ? (
+                    <Button key={action.take} size="sm" className="h-6 px-1 text-[10px]" onClick={() => onAction(action)}>
+                      Por {RESOURCE_LABEL[action.take]}
+                    </Button>
+                  ) : null,
+                )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function useShownOffer(offer: TradeOffer | null): TradeOffer | null {
+  const seen = useRef<TradeOffer | null>(null);
+  const [linger, setLinger] = useState<TradeOffer | null>(null);
+  useEffect(() => {
+    if (offer) {
+      seen.current = offer;
+      return;
+    }
+    const prev = seen.current;
+    if (!prev) return;
+    seen.current = null;
+    const pending = Object.entries(prev.responses).filter(([, response]) => response === "pending");
+    const rejected = Object.values(prev.responses).filter((response) => response === "rejected").length;
+    const accepted = Object.values(prev.responses).some((response) => response === "accepted");
+    if (accepted || rejected === 0 || pending.length !== 1) return;
+    const lastId = pending[0]?.[0];
+    if (!lastId) return;
+    setLinger({ ...prev, responses: { ...prev.responses, [lastId]: "rejected" } });
+    const timer = window.setTimeout(() => setLinger(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [offer]);
+  return offer ?? linger;
+}
+
+function OfferBoard({
+  view,
+  youId,
+  onAction,
+}: {
+  view: PublicView;
+  youId: string;
+  onAction: (action: Action) => void;
+}) {
+  const offer = useShownOffer(view.tradeOffers[0] ?? null);
+  if (!offer) return null;
+  const offers = [offer];
+  return (
+    <ul className="space-y-1">
+      {offers.map((offer) => {
+        const owner = view.players.find((player) => player.id === offer.from);
+        return (
+          <li key={offer.id} className="space-y-1">
+            <div>
+              {owner?.name} oferece {fmt(offer.give)} por {fmt(offer.want)}
+            </div>
+            {view.players
+              .filter((player) => player.id !== offer.from)
+              .map((player) => {
+                const response = offer.responses[player.id] ?? "pending";
+                return (
+                  <div key={player.id} data-trade-player={player.name}>
+                    {player.name}:{" "}
+                    {response === "accepted" ? (
+                      <Button
+                        size="sm"
+                        className="h-6 px-1 text-[10px]"
+                        onClick={() => onAction({ type: "ACCEPT_TRADE", playerId: player.id, offerId: offer.id })}
+                      >
+                        Fechar com {player.name}
+                      </Button>
+                    ) : response === "rejected" ? (
+                      "recusou"
+                    ) : player.id === youId ? (
+                      <Button
+                        size="sm"
+                        className="h-6 px-1 text-[10px]"
+                        onClick={() => onAction({ type: "ACCEPT_TRADE", playerId: youId, offerId: offer.id })}
+                      >
+                        Aceitar
+                      </Button>
+                    ) : (
+                      "aguardando"
+                    )}
+                  </div>
+                );
+              })}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function TradeStepper({
+  label,
+  value,
+  onChange,
+  cap,
+}: {
+  label: string;
+  value: ResourceMap;
+  onChange: (next: ResourceMap) => void;
+  cap?: ResourceMap;
+}) {
+  return (
+    <div>
+      <p className="mb-1 text-[10px] tracking-wider uppercase">{label}</p>
+      <div className="grid grid-cols-5 gap-0.5">
+        {RESOURCES.map((resource) => {
+          const max = cap ? cap[resource] : 8;
+          return (
+            <div key={resource} className="flex flex-col items-center gap-0.5">
+              <img src={CHIP_SPRITE[resource]} alt="" className="pixelated size-4" />
+              <span className="text-[11px] tabular-nums">{value[resource]}</span>
+              <span className="flex">
+                <button
+                  type="button"
+                  aria-label={`menos ${label} ${RESOURCE_LABEL[resource]}`}
+                  className="pixel-btn bg-secondary px-1 text-[10px] leading-none"
+                  disabled={value[resource] <= 0}
+                  onClick={() => onChange({ ...value, [resource]: value[resource] - 1 })}
+                >
+                  -
+                </button>
+                <button
+                  type="button"
+                  aria-label={`mais ${label} ${RESOURCE_LABEL[resource]}`}
+                  className="pixel-btn bg-secondary px-1 text-[10px] leading-none"
+                  disabled={value[resource] >= max}
+                  onClick={() => onChange({ ...value, [resource]: value[resource] + 1 })}
+                >
+                  +
+                </button>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function tradeTabClass(active: boolean): string {
+  return `pixel-btn px-2 py-0.5 text-[11px] ${active ? "bg-primary text-primary-foreground" : "bg-secondary"}`;
+}
+
 function fmt(m: ResourceMap): string {
   return RESOURCES.filter((r) => m[r] > 0)
-    .map((r) => `${m[r]} ${RESOURCE_LABEL[r]}`)
+    .map((r) => `${m[r]} ${RESOURCE_LABEL[r].toLowerCase()}`)
     .join(", ");
 }
 

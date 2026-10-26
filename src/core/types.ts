@@ -96,11 +96,14 @@ export type Phase =
   | { type: "freeRoads"; remaining: number }
   | { type: "gameOver"; winner: PlayerId };
 
+export type TradeResponse = "pending" | "rejected" | "accepted";
+
 export interface TradeOffer {
   id: string;
   from: PlayerId;
   give: ResourceMap;
   want: ResourceMap;
+  responses: Record<PlayerId, TradeResponse>;
 }
 
 export interface LogEntry {
@@ -117,6 +120,7 @@ export interface GameState {
   bank: ResourceMap;
   devDeck: DevCardType[];
   tradeOffers: TradeOffer[];
+  offerSeq: number;
   longestRoadPlayerId: PlayerId | null;
   largestArmyPlayerId: PlayerId | null;
   turnNumber: number;

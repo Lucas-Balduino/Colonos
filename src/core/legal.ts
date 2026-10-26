@@ -139,11 +139,16 @@ export function legalActions(state: GameState, playerId: PlayerId): Action[] {
 
   if (phase.type === "main") {
     for (const offer of state.tradeOffers) {
+      const response = offer.responses[playerId];
       if (offer.from === playerId) {
         actions.push({ type: "CANCEL_TRADE", playerId, offerId: offer.id });
-      } else if (hasAtLeast(player.resources, offer.want)) {
-        actions.push({ type: "ACCEPT_TRADE", playerId, offerId: offer.id });
+      } else if (response === "pending") {
+        if (hasAtLeast(player.resources, offer.want)) {
+          actions.push({ type: "ACCEPT_TRADE", playerId, offerId: offer.id });
+        }
         actions.push({ type: "REJECT_TRADE", playerId, offerId: offer.id });
+      } else if (response === "accepted" && hasAtLeast(player.resources, offer.want)) {
+        actions.push({ type: "ACCEPT_TRADE", playerId, offerId: offer.id });
       }
     }
   }
