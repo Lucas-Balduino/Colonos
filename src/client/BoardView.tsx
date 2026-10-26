@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Application, extend, useTick } from "@pixi/react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Application, extend } from "@pixi/react";
 import { LocateFixed, Minus, Plus } from "lucide-react";
 import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import type { Graphics as PixiGraphics } from "pixi.js";
@@ -18,16 +18,52 @@ import {
 } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import { FACTION_HEX, PALETTE } from "./theme.ts";
+import { AnimClockProvider, useAnimFrame } from "./anim-clock.tsx";
 import { buildModeCopy, phaseCopy, type BuildMode } from "./copy.ts";
 import { preloadSprites } from "./preload.ts";
 
 extend({ Container, Graphics, Sprite, Text });
 
+declare global {
+  interface Window {
+    __colonosBoardRenders?: number;
+  }
+}
+
 const DRAG_SLOP = 10;
-const VERTEX_PICK = 30;
-const EDGE_PICK = 20;
-const HEX_PICK = HEX_SIZE * 0.78;
+const VERTEX_PICK_PX = 22;
+const EDGE_PICK_PX = 16;
+const HEX_PICK_PX = 40;
 const PORT_PICK = 18;
+const LEVELS = [1, 1.5, 2, 3] as const;
+
+const SEA_EXTENT = (() => {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let q = -3; q <= 3; q++) {
+    for (let r = -3; r <= 3; r++) {
+      if (cubeDistance({ q, r }) > 3) continue;
+      const p = pointyHexToPixel({ q, r }, HEX_SIZE);
+      for (let i = 0; i < 6; i++) {
+        const c = hexCorner(p, HEX_SIZE, i);
+        minX = Math.min(minX, c.x);
+        maxX = Math.max(maxX, c.x);
+        minY = Math.min(minY, c.y);
+        maxY = Math.max(maxY, c.y);
+      }
+    }
+  }
+  return { width: maxX - minX, height: maxY - minY };
+})();
+
+function computeFit(w: number, h: number): number {
+  if (w < 8 || h < 8) return 1;
+  const raw = Math.min(w / SEA_EXTENT.width, h / SEA_EXTENT.height) * 0.94;
+  const stepped = Math.floor(raw * 4) / 4;
+  return Math.min(2, Math.max(0.5, stepped));
+}
 
 type PickKind = "vertex" | "edge" | "hex" | "victim" | "port";
 
@@ -50,6 +86,17 @@ function vertexPos(board: Board, vid: string): { x: number; y: number } {
     }
   }
   return { x: 0, y: 0 };
+}
+
+function portAnchor(board: Board, origin: { x: number; y: number }, edgeId: string) {
+  const port = board.ports.find((item) => item.edgeId === edgeId);
+  if (!port) return { x: 0, y: 0 };
+  const a = vertexPos(board, port.vertices[0]);
+  const b = vertexPos(board, port.vertices[1]);
+  const mx = (a.x + b.x) / 2;
+  const my = (a.y + b.y) / 2;
+  const outward = Math.hypot(mx - origin.x, my - origin.y) || 1;
+  return { x: mx + ((mx - origin.x) / outward) * 22, y: my + ((my - origin.y) / outward) * 18 };
 }
 
 function seaRing(): { q: number; r: number }[] {
@@ -135,25 +182,49 @@ export function BoardView({
   const { map: textures, progress } = useTextures();
   const you = view.you;
   const legal = view.legal;
-  const [zoom, setZoom] = useState(1);
+  const [nivel, setNivel] = useState<(typeof LEVELS)[number]>(1);
+  const [pinchZoom, setPinchZoom] = useState<number | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [size, setSize] = useState({ w: 640, h: 480 });
   const [shakeUntil, setShakeUntil] = useState(0);
   const [nudge, setNudge] = useState(0);
   const [hover, setHover] = useState<{ kind: PickKind; id: string } | null>(null);
+  const [armed, setArmed] = useState<{ kind: PickKind; id: string } | null>(null);
   const [pendingRobberHex, setPendingRobberHex] = useState<string | null>(null);
-  const [tipAt, setTipAt] = useState<{ x: number; y: number } | null>(null);
+  const [tipId, setTipId] = useState<string | null>(null);
   const [robberPos, setRobberPos] = useState(view.board.robberHexId);
   const [flash, setFlash] = useState<Set<string>>(new Set());
   const [pops, setPops] = useState<Record<string, number>>({});
-  const drag = useRef<{ sx: number; sy: number; px: number; py: number; moved: boolean } | null>(null);
+  const drag = useRef<{
+    sx: number;
+    sy: number;
+    px: number;
+    py: number;
+    moved: boolean;
+    pointerType: string;
+  } | null>(null);
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{ startDist: number; startZoom: number; worldX: number; worldY: number } | null>(null);
   const panRef = useRef(pan);
-  const zoomRef = useRef(zoom);
+  const zoomRef = useRef(1);
+  const fitRef = useRef(1);
   const nudgeRef = useRef(nudge);
   const originRef = useRef({ x: 0, y: 0 });
+  const hoverRef = useRef(hover);
+  const armedRef = useRef(armed);
+  const tipRef = useRef<HTMLDivElement>(null);
+  const tipIdRef = useRef<string | null>(null);
   panRef.current = pan;
-  zoomRef.current = zoom;
   nudgeRef.current = nudge;
+  hoverRef.current = hover;
+  armedRef.current = armed;
+  const fit = computeFit(size.w, size.h);
+  const zoom = pinchZoom == null ? Math.min(3, fit * nivel) : Math.min(3, Math.max(fit, pinchZoom));
+  fitRef.current = fit;
+  zoomRef.current = zoom;
+  if (import.meta.env.DEV) {
+    window.__colonosBoardRenders = (window.__colonosBoardRenders ?? 0) + 1;
+  }
   const prevDice = useRef(view.dice);
   const prevRobber = useRef(view.board.robberHexId);
   const prevBuildings = useRef<string>("");
@@ -250,6 +321,8 @@ export function BoardView({
 
   useEffect(() => {
     if (view.phase.type !== "moveRobber") setPendingRobberHex(null);
+    armedRef.current = null;
+    setArmed(null);
   }, [view.phase]);
 
   useEffect(() => {
@@ -259,11 +332,6 @@ export function BoardView({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-
-  const landHexes = useMemo(
-    () => Object.values(view.board.hexes).sort((a, b) => b.r - a.r || b.q - a.q),
-    [view.board.hexes],
-  );
 
   const origin = useMemo(() => {
     let minX = Infinity,
@@ -414,91 +482,216 @@ export function BoardView({
     };
   };
 
-  const portAnchor = (edgeId: string) => {
-    const port = view.board.ports.find((item) => item.edgeId === edgeId);
-    if (!port) return { x: 0, y: 0 };
-    const a = vertexPos(view.board, port.vertices[0]);
-    const b = vertexPos(view.board, port.vertices[1]);
-    const mx = (a.x + b.x) / 2;
-    const my = (a.y + b.y) / 2;
-    const outward = Math.hypot(mx - origin.x, my - origin.y) || 1;
-    return { x: mx + ((mx - origin.x) / outward) * 22, y: my + ((my - origin.y) / outward) * 18 };
+  const limitsFor = (pointerType: string) => {
+    const touch = pointerType === "touch" ? 1.4 : 1;
+    const z = Math.max(0.05, zoomRef.current);
+    return {
+      vertex: (VERTEX_PICK_PX * touch) / z,
+      edge: (EDGE_PICK_PX * touch) / z,
+      hex: (HEX_PICK_PX * touch) / z,
+    };
   };
 
-  const pickAt = (world: { x: number; y: number }): { kind: PickKind; id: string; d: number } | null => {
+  const pickAt = (world: { x: number; y: number }, pointerType: string): { kind: PickKind; id: string; d: number } | null => {
+    const limits = limitsFor(pointerType);
     const hits: { kind: PickKind; id: string; d: number }[] = [];
     const consider = (kind: PickKind, id: string, d: number, limit: number) => {
       if (d <= limit) hits.push({ kind, id, d });
     };
     for (const id of victimTargets.keys()) {
       const p = vertexPos(view.board, id);
-      consider("victim", id, Math.hypot(world.x - p.x, world.y - p.y), VERTEX_PICK);
+      consider("victim", id, Math.hypot(world.x - p.x, world.y - p.y), limits.vertex);
     }
     for (const id of settleTargets) {
       const p = vertexPos(view.board, id);
-      consider("vertex", id, Math.hypot(world.x - p.x, world.y - p.y), VERTEX_PICK);
+      consider("vertex", id, Math.hypot(world.x - p.x, world.y - p.y), limits.vertex);
     }
     for (const id of cityTargets) {
       const p = vertexPos(view.board, id);
-      consider("vertex", id, Math.hypot(world.x - p.x, world.y - p.y), VERTEX_PICK);
+      consider("vertex", id, Math.hypot(world.x - p.x, world.y - p.y), limits.vertex);
     }
     for (const id of roadTargets) {
       const edge = view.board.edges[id];
       if (!edge) continue;
       const a = vertexPos(view.board, edge.vertices[0]);
       const b = vertexPos(view.board, edge.vertices[1]);
-      consider("edge", id, distToSegment(world.x, world.y, a.x, a.y, b.x, b.y), EDGE_PICK);
+      consider("edge", id, distToSegment(world.x, world.y, a.x, a.y, b.x, b.y), limits.edge);
     }
     for (const id of robberTargets.keys()) {
       const hex = view.board.hexes[id];
       if (!hex) continue;
       const p = pointyHexToPixel(hex, HEX_SIZE);
-      consider("hex", id, Math.hypot(world.x - p.x, world.y - p.y), HEX_PICK);
+      consider("hex", id, Math.hypot(world.x - p.x, world.y - p.y), limits.hex);
     }
     for (const port of view.board.ports) {
-      const p = portAnchor(port.edgeId);
+      const p = portAnchor(view.board, origin, port.edgeId);
       consider("port", port.edgeId, Math.hypot(world.x - p.x, world.y - p.y), PORT_PICK);
     }
     if (hits.length === 0) return null;
     return hits.reduce((best, hit) => (hit.d < best.d ? hit : best));
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    setZoom((z) => Math.min(3, Math.max(1, z + (e.deltaY < 0 ? 1 : -1))));
-  };
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y, moved: false };
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const world = clientToWorld(e.clientX, e.clientY);
-    const hit = pickAt(world);
-    setHover(hit ? { kind: hit.kind, id: hit.id } : null);
-    if (hit?.kind === "port" && host.current) {
-      const rect = host.current.getBoundingClientRect();
-      setTipAt({ x: e.clientX - rect.left + 14, y: e.clientY - rect.top + 14 });
-    } else if (tipAt) {
-      setTipAt(null);
-    }
-    const d = drag.current;
-    if (!d) return;
-    if (Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) < DRAG_SLOP) return;
-    d.moved = true;
-    setPan({ x: d.px + (e.clientX - d.sx), y: d.py + (e.clientY - d.sy) });
-  };
-  const onPointerUp = (e: React.PointerEvent) => {
-    const d = drag.current;
-    drag.current = null;
-    if (!d || d.moved) return;
-    const hit = pickAt(clientToWorld(e.clientX, e.clientY));
-    if (!hit) return;
+  const dispatchHit = (hit: { kind: PickKind; id: string }) => {
     if (hit.kind === "vertex") clickVertex(hit.id);
     else if (hit.kind === "edge") clickEdge(hit.id);
     else if (hit.kind === "hex") clickHex(hit.id);
     else if (hit.kind === "victim") clickVictim(hit.id);
+  };
+
+  const rememberHover = (next: { kind: PickKind; id: string } | null) => {
+    const prev = hoverRef.current;
+    if (prev?.kind === next?.kind && prev?.id === next?.id) return;
+    hoverRef.current = next;
+    setHover(next);
+  };
+
+  const placeTip = (clientX: number, clientY: number, id: string | null) => {
+    const node = tipRef.current;
+    if (!node || !host.current) return;
+    if (!id) {
+      node.style.display = "none";
+      if (tipIdRef.current) {
+        tipIdRef.current = null;
+        setTipId(null);
+      }
+      return;
+    }
+    const rect = host.current.getBoundingClientRect();
+    node.style.display = "block";
+    node.style.left = `${clientX - rect.left + 14}px`;
+    node.style.top = `${clientY - rect.top + 14}px`;
+    if (tipIdRef.current !== id) {
+      tipIdRef.current = id;
+      setTipId(id);
+    }
+  };
+
+  const stepNivel = (dir: 1 | -1, anchor?: { x: number; y: number }) => {
+    const fitNow = fitRef.current;
+    const ratio = fitNow > 0 ? zoomRef.current / fitNow : 1;
+    let index = 0;
+    if (dir > 0) {
+      const found = LEVELS.findIndex((level) => level > ratio + 0.01);
+      index = found < 0 ? LEVELS.length - 1 : found;
+    } else {
+      for (let i = LEVELS.length - 1; i >= 0; i--) {
+        if (LEVELS[i]! < ratio - 0.01) {
+          index = i;
+          break;
+        }
+      }
+    }
+    const next = LEVELS[index]!;
+    const newZoom = Math.min(3, fitNow * next);
+    if (anchor && host.current) {
+      const world = clientToWorld(anchor.x, anchor.y);
+      const rect = host.current.getBoundingClientRect();
+      setPan({
+        x: anchor.x - rect.left - host.current.clientWidth / 2 - (world.x - originRef.current.x) * newZoom,
+        y: anchor.y - rect.top - host.current.clientHeight / 2 - (world.y - originRef.current.y) * newZoom,
+      });
+    } else {
+      const k = zoomRef.current > 0 ? newZoom / zoomRef.current : 1;
+      setPan((p) => ({ x: p.x * k, y: p.y * k }));
+    }
+    zoomRef.current = newZoom;
+    setPinchZoom(null);
+    setNivel(next);
+  };
+
+  const onWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    stepNivel(e.deltaY < 0 ? 1 : -1, { x: e.clientX, y: e.clientY });
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size >= 2) {
+      const pts = [...pointers.current.values()];
+      const a = pts[0]!;
+      const b = pts[1]!;
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const world = clientToWorld(mid.x, mid.y);
+      pinchRef.current = {
+        startDist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+        startZoom: zoomRef.current,
+        worldX: world.x,
+        worldY: world.y,
+      };
+      drag.current = null;
+      return;
+    }
+    drag.current = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y, moved: false, pointerType: e.pointerType };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (pointers.current.has(e.pointerId)) {
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (pinchRef.current && pointers.current.size >= 2 && host.current) {
+      const pts = [...pointers.current.values()];
+      const a = pts[0]!;
+      const b = pts[1]!;
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const next = Math.min(3, Math.max(fitRef.current, pinchRef.current.startZoom * (dist / pinchRef.current.startDist)));
+      const rect = host.current.getBoundingClientRect();
+      setPan({
+        x: mid.x - rect.left - host.current.clientWidth / 2 - (pinchRef.current.worldX - originRef.current.x) * next,
+        y: mid.y - rect.top - host.current.clientHeight / 2 - (pinchRef.current.worldY - originRef.current.y) * next,
+      });
+      zoomRef.current = next;
+      setPinchZoom(next);
+      return;
+    }
+    const hit = pickAt(clientToWorld(e.clientX, e.clientY), e.pointerType);
+    rememberHover(hit ? { kind: hit.kind, id: hit.id } : null);
+    placeTip(e.clientX, e.clientY, hit?.kind === "port" ? hit.id : null);
+    const d = drag.current;
+    if (!d) return;
+    if (Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) < DRAG_SLOP) return;
+    if (d.pointerType === "touch" && zoomRef.current <= fitRef.current + 0.02) return;
+    d.moved = true;
+    setPan({ x: d.px + (e.clientX - d.sx), y: d.py + (e.clientY - d.sy) });
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    if (pinchRef.current && pointers.current.size < 2) {
+      const rounded = Math.min(3, Math.max(fitRef.current, Math.round(zoomRef.current * 4) / 4));
+      zoomRef.current = rounded;
+      setPinchZoom(rounded);
+      pinchRef.current = null;
+      drag.current = null;
+      return;
+    }
+    const d = drag.current;
+    drag.current = null;
+    if (!d || d.moved) return;
+    const hit = pickAt(clientToWorld(e.clientX, e.clientY), e.pointerType);
+    if (e.pointerType === "touch") {
+      if (!hit || hit.kind === "port") {
+        armedRef.current = null;
+        setArmed(null);
+        rememberHover(null);
+        return;
+      }
+      const next = { kind: hit.kind, id: hit.id };
+      if (armedRef.current?.kind === next.kind && armedRef.current.id === next.id) {
+        armedRef.current = null;
+        setArmed(null);
+        dispatchHit(next);
+        return;
+      }
+      armedRef.current = next;
+      rememberHover(next);
+      setArmed(next);
+      return;
+    }
+    if (!hit || hit.kind === "port") return;
+    dispatchHit(hit);
   };
 
   const youPlayer = view.players.find((p) => p.id === you);
@@ -507,14 +700,16 @@ export function BoardView({
   const robberPixel = robberHex ? pointyHexToPixel(robberHex, HEX_SIZE) : { x: 0, y: 0 };
   const yourTurn = Boolean(you && you === view.currentPlayerId);
   const hint = boardHint(view, settleTargets.size, cityTargets.size, roadTargets.size, robberTargets.size);
+  const active = armed ?? hover;
   const canClick = Boolean(
-    hover &&
-      ((hover.kind === "vertex" && (settleTargets.has(hover.id) || cityTargets.has(hover.id))) ||
-        (hover.kind === "edge" && roadTargets.has(hover.id)) ||
-        (hover.kind === "hex" && robberTargets.has(hover.id)) ||
-        (hover.kind === "victim" && victimTargets.has(hover.id)) ||
-        hover.kind === "port"),
+    active &&
+      ((active.kind === "vertex" && (settleTargets.has(active.id) || cityTargets.has(active.id))) ||
+        (active.kind === "edge" && roadTargets.has(active.id)) ||
+        (active.kind === "hex" && robberTargets.has(active.id)) ||
+        (active.kind === "victim" && victimTargets.has(active.id)) ||
+        active.kind === "port"),
   );
+  const hoverHex = active?.kind === "hex" && robberTargets.has(active.id) ? view.board.hexes[active.id] : undefined;
 
   return (
     <div
@@ -527,8 +722,8 @@ export function BoardView({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onPointerLeave={() => {
-        if (!drag.current) setHover(null);
-        setTipAt(null);
+        if (!drag.current && !armedRef.current) rememberHover(null);
+        placeTip(0, 0, null);
       }}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -536,91 +731,16 @@ export function BoardView({
       }}
     >
       <Application resizeTo={host} background={0x0c2433} antialias={false} roundPixels preference="webgl">
+        <AnimClockProvider>
         <pixiContainer x={size.w / 2 + pan.x + nudge} y={size.h / 2 + pan.y} scale={zoom}>
           <pixiContainer x={-origin.x} y={-origin.y}>
-            {seaRing().map((h) => {
-              const p = pointyHexToPixel(h, HEX_SIZE);
-              const tex = textures?.["/sprites/hex-sea.png"];
-              const far = cubeDistance(h) === 4;
-              return tex ? (
-                <pixiSprite
-                  key={`sea-${h.q},${h.r}`}
-                  texture={tex}
-                  x={p.x}
-                  y={p.y}
-                  anchor={HEX_SPRITE_ANCHOR}
-                  alpha={far ? 0.55 : 1}
-                  eventMode="none"
-                />
-              ) : null;
-            })}
-            <IslandBase board={view.board} />
-            {landHexes.map((hex) => {
-              const p = pointyHexToPixel(hex, HEX_SIZE);
-              const url = TERRAIN_SPRITE[hex.terrain];
-              const tex = url ? textures?.[url] : undefined;
-              const canRob = robberTargets.has(hex.id);
-              return (
-                <pixiContainer key={hex.id} x={p.x} y={p.y} eventMode="none">
-                  {tex ? (
-                    <pixiSprite texture={tex} anchor={HEX_SPRITE_ANCHOR} eventMode="none" />
-                  ) : (
-                    <FallbackHex terrain={hex.terrain} />
-                  )}
-                  {hover?.kind === "hex" && hover.id === hex.id && canRob ? <RobberShade /> : null}
-                  {hover?.kind === "hex" && hover.id === hex.id && canRob ? (
-                    <RobberSprite x={0} y={-4} textures={textures} alpha={0.5} />
-                  ) : null}
-                </pixiContainer>
-              );
-            })}
-            <CoastFoam board={view.board} />
-            {landHexes.map((hex) => {
-              if (hex.number === null) return null;
-              const p = pointyHexToPixel(hex, HEX_SIZE);
-              return (
-                <NumberToken
-                  key={`tok-${hex.id}`}
-                  x={p.x}
-                  y={Math.round(p.y + 2)}
-                  value={hex.number}
-                  texture={textures?.["/sprites/token.png"]}
-                  hot={flash.has(hex.id)}
-                />
-              );
-            })}
-            {view.board.ports.map((port) => {
-              const anchor = portAnchor(port.edgeId);
-              const url = port.ratio === 3 ? "/sprites/port-any.png" : "/sprites/port-2.png";
-              const tex = textures?.[url];
-              const specific = port.ratio === 2 && port.resource !== "any";
-              const chip = specific ? textures?.[CHIP_SPRITE[port.resource]] : undefined;
-              return (
-                <pixiContainer key={port.edgeId} x={anchor.x} y={anchor.y}>
-                  {tex ? <pixiSprite texture={tex} anchor={0.5} eventMode="none" /> : null}
-                  {chip ? <pixiSprite texture={chip} x={-14} y={16} anchor={0.5} scale={0.75} eventMode="none" /> : null}
-                  <pixiText
-                    text={port.ratio === 3 ? "3:1" : "2:1"}
-                    x={specific ? 12 : 0}
-                    y={16}
-                    anchor={0.5}
-                    eventMode="none"
-                    style={{
-                      fontFamily: "Pixelify Sans, monospace",
-                      fontSize: 9,
-                      fill: PALETTE.gold,
-                      fontWeight: "700",
-                    }}
-                  />
-                </pixiContainer>
-              );
-            })}
+            <IslandPicture board={view.board} textures={textures} flash={flash} origin={origin} />
             {sortedEdges.map((edge) => {
               const a = vertexPos(view.board, edge.vertices[0]);
               const b = vertexPos(view.board, edge.vertices[1]);
               const owner = view.players.find((p) => p.id === edge.road);
               const hot = roadTargets.has(edge.id);
-              const hovered = hover?.kind === "edge" && hover.id === edge.id;
+              const hovered = active?.kind === "edge" && active.id === edge.id;
               const ghost = hot && !edge.road;
               const color = owner?.color ?? youColor;
               const ang = Math.atan2(b.y - a.y, b.x - a.x);
@@ -648,7 +768,7 @@ export function BoardView({
               const p = vertexPos(view.board, v.id);
               const owner = v.building ? view.players.find((pl) => pl.id === v.building?.owner) : null;
               const hot = settleTargets.has(v.id) || cityTargets.has(v.id);
-              const hovered = hover?.kind === "vertex" && hover.id === v.id;
+              const hovered = active?.kind === "vertex" && active.id === v.id;
               const ghost = hot && !v.building;
               const cityPick = cityTargets.has(v.id);
               const previewCity = cityPick && hovered;
@@ -680,6 +800,12 @@ export function BoardView({
                 </pixiContainer>
               );
             })}
+            {hoverHex ? (
+              <pixiContainer x={pointyHexToPixel(hoverHex, HEX_SIZE).x} y={pointyHexToPixel(hoverHex, HEX_SIZE).y}>
+                <RobberShade />
+                <RobberSprite x={0} y={-4} textures={textures} alpha={0.5} />
+              </pixiContainer>
+            ) : null}
             <RobberSprite x={robberPixel.x} y={robberPixel.y - 4} textures={textures} />
             {pendingRobberHex && view.board.hexes[pendingRobberHex] ? (
               <RobberSprite
@@ -691,13 +817,14 @@ export function BoardView({
             ) : null}
           </pixiContainer>
         </pixiContainer>
+        </AnimClockProvider>
       </Application>
       <div className="absolute right-3 bottom-3 z-10 flex flex-col gap-1">
         <button
           type="button"
           aria-label="+"
           className="pixel-btn bg-secondary grid size-8 place-items-center"
-          onClick={() => setZoom((z) => Math.min(3, z + 1))}
+          onClick={() => stepNivel(1)}
         >
           <Plus className="size-4" />
         </button>
@@ -705,7 +832,7 @@ export function BoardView({
           type="button"
           aria-label="−"
           className="pixel-btn bg-secondary grid size-8 place-items-center"
-          onClick={() => setZoom((z) => Math.max(1, z - 1))}
+          onClick={() => stepNivel(-1)}
         >
           <Minus className="size-4" />
         </button>
@@ -714,8 +841,10 @@ export function BoardView({
           aria-label="Centralizar"
           className="pixel-btn bg-secondary grid size-8 place-items-center"
           onClick={() => {
-            setZoom(1);
+            setPinchZoom(null);
+            setNivel(1);
             setPan({ x: 0, y: 0 });
+            zoomRef.current = Math.min(3, fitRef.current);
           }}
         >
           <LocateFixed className="size-4" />
@@ -728,19 +857,20 @@ export function BoardView({
             : buildMode
               ? buildModeCopy(buildMode)
               : phaseCopy(view.phase, yourTurn && interactive)}
-          {settleTargets.size + cityTargets.size + roadTargets.size + robberTargets.size > 0 ? (
+          {armed ? (
+            <span className="mt-0.5 block">Toque de novo para confirmar</span>
+          ) : settleTargets.size + cityTargets.size + roadTargets.size + robberTargets.size > 0 ? (
             <span className="mt-0.5 block">{hint}</span>
           ) : null}
         </p>
       </div>
-      {hover?.kind === "port" && tipAt ? (
-        <div
-          className="wood-panel pointer-events-none absolute z-20 max-w-xs px-2 py-1 text-[11px]"
-          style={{ left: tipAt.x, top: tipAt.y }}
-        >
-          {portHint(view.board.ports.find((port) => port.edgeId === hover.id))}
-        </div>
-      ) : null}
+      <div
+        ref={tipRef}
+        className="wood-panel pointer-events-none absolute z-20 max-w-xs px-2 py-1 text-[11px]"
+        style={{ display: "none" }}
+      >
+        {portHint(view.board.ports.find((port) => port.edgeId === tipId))}
+      </div>
       {!textures ? <TableLoading progress={progress} /> : null}
     </div>
   );
@@ -778,11 +908,9 @@ function RobberSprite({
   textures: Record<string, Texture> | null;
   alpha?: number;
 }) {
-  const [frame, setFrame] = useState(0);
-  useTick(() => {
-    setFrame(Math.floor(performance.now() / 380) % 2);
-  });
-  const tex = textures?.[`/sprites/robber-${frame}.png`];
+  const frame = useAnimFrame();
+  const blink = Math.floor((frame * 83) / 380) % 2;
+  const tex = textures?.[`/sprites/robber-${blink}.png`];
   if (!tex) return null;
   return <pixiSprite texture={tex} x={x} y={y} alpha={alpha} anchor={{ x: 0.5, y: 0.85 }} eventMode="none" />;
 }
@@ -1001,6 +1129,104 @@ function FallbackToken() {
   }, []);
   return <pixiGraphics draw={draw} />;
 }
+
+const IslandPicture = memo(function IslandPicture({
+  board,
+  textures,
+  flash,
+  origin,
+}: {
+  board: Board;
+  textures: Record<string, Texture> | null;
+  flash: Set<string>;
+  origin: { x: number; y: number };
+}) {
+  const ref = useRef<Container | null>(null);
+  const cacheKey = `${board.robberHexId}|${textures ? Object.keys(textures).length : 0}|${[...flash].join(",")}`;
+  useEffect(() => {
+    const container = ref.current;
+    if (!container) return;
+    container.cacheAsTexture(false);
+    container.cacheAsTexture({ antialias: false, resolution: 1, scaleMode: "nearest" });
+    container.updateCacheTexture();
+    return () => {
+      container.cacheAsTexture(false);
+    };
+  }, [cacheKey]);
+  const land = Object.values(board.hexes).sort((a, b) => b.r - a.r || b.q - a.q);
+  return (
+    <pixiContainer ref={ref}>
+      {seaRing().map((h) => {
+        const p = pointyHexToPixel(h, HEX_SIZE);
+        const tex = textures?.["/sprites/hex-sea.png"];
+        const far = cubeDistance(h) === 4;
+        return tex ? (
+          <pixiSprite
+            key={`sea-${h.q},${h.r}`}
+            texture={tex}
+            x={p.x}
+            y={p.y}
+            anchor={HEX_SPRITE_ANCHOR}
+            alpha={far ? 0.55 : 1}
+            eventMode="none"
+          />
+        ) : null;
+      })}
+      <IslandBase board={board} />
+      {land.map((hex) => {
+        const p = pointyHexToPixel(hex, HEX_SIZE);
+        const url = TERRAIN_SPRITE[hex.terrain];
+        const tex = url ? textures?.[url] : undefined;
+        return (
+          <pixiContainer key={hex.id} x={p.x} y={p.y} eventMode="none">
+            {tex ? <pixiSprite texture={tex} anchor={HEX_SPRITE_ANCHOR} eventMode="none" /> : <FallbackHex terrain={hex.terrain} />}
+          </pixiContainer>
+        );
+      })}
+      <CoastFoam board={board} />
+      {land.map((hex) => {
+        if (hex.number === null) return null;
+        const p = pointyHexToPixel(hex, HEX_SIZE);
+        return (
+          <NumberToken
+            key={`tok-${hex.id}`}
+            x={p.x}
+            y={Math.round(p.y + 2)}
+            value={hex.number}
+            texture={textures?.["/sprites/token.png"]}
+            hot={flash.has(hex.id)}
+          />
+        );
+      })}
+      {board.ports.map((port) => {
+        const anchor = portAnchor(board, origin, port.edgeId);
+        const url = port.ratio === 3 ? "/sprites/port-any.png" : "/sprites/port-2.png";
+        const tex = textures?.[url];
+        const specific = port.ratio === 2 && port.resource !== "any";
+        const chip = specific ? textures?.[CHIP_SPRITE[port.resource]] : undefined;
+        return (
+          <pixiContainer key={port.edgeId} x={anchor.x} y={anchor.y}>
+            {tex ? <pixiSprite texture={tex} anchor={0.5} eventMode="none" /> : null}
+            {chip ? <pixiSprite texture={chip} x={-14} y={16} anchor={0.5} scale={0.75} eventMode="none" /> : null}
+            <pixiText
+              text={port.ratio === 3 ? "3:1" : "2:1"}
+              x={specific ? 12 : 0}
+              y={16}
+              anchor={0.5}
+              eventMode="none"
+              style={{
+                fontFamily: "Pixelify Sans, monospace",
+                fontSize: 9,
+                fill: PALETTE.gold,
+                fontWeight: "700",
+              }}
+            />
+          </pixiContainer>
+        );
+      })}
+    </pixiContainer>
+  );
+});
 
 function SurveyStakes({ color }: { color: string }) {
   const draw = useCallback(

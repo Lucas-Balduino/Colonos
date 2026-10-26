@@ -140,42 +140,12 @@ export function Hud({
         ))}
       </div>
 
-      <div className="wood-panel p-2">
-        <p className="mb-1 text-[10px] tracking-[0.2em] uppercase text-[#d4a017]">Construir</p>
-        <div className="grid grid-cols-2 gap-1">
-          <BuildChoice
-            label="Estrada"
-            parts={["wood", "brick"]}
-            enabled={legal.some((a) => a.type === "BUILD_ROAD")}
-            pressed={buildMode === "road"}
-            onClick={() => onBuildMode?.("road")}
-          />
-          <BuildChoice
-            label="Aldeia"
-            parts={["wood", "brick", "sheep", "wheat"]}
-            enabled={legal.some((a) => a.type === "BUILD_SETTLEMENT")}
-            pressed={buildMode === "settlement"}
-            onClick={() => onBuildMode?.("settlement")}
-          />
-          <BuildChoice
-            label="Cidade"
-            parts={["wheat", "wheat", "ore", "ore", "ore"]}
-            enabled={legal.some((a) => a.type === "BUILD_CITY")}
-            pressed={buildMode === "city"}
-            onClick={() => onBuildMode?.("city")}
-          />
-          <BuildChoice
-            label="Carta"
-            parts={["sheep", "wheat", "ore"]}
-            enabled={legal.some((a) => a.type === "BUY_DEV")}
-            pressed={false}
-            onClick={() => {
-              const buy = legal.find((a) => a.type === "BUY_DEV");
-              if (buy) act(buy);
-            }}
-          />
-        </div>
-      </div>
+      <BuildPanel
+        legal={legal}
+        buildMode={buildMode}
+        onBuildMode={onBuildMode}
+        onBuy={(action) => act(action)}
+      />
 
       {you?.resources ? (
         <div className="wood-panel p-3">
@@ -451,6 +421,70 @@ export function Hud({
         </ScrollArea>
       </div>
     </aside>
+  );
+}
+
+export function BuildPanel({
+  legal,
+  buildMode,
+  onBuildMode,
+  onBuy,
+}: {
+  legal: Action[];
+  buildMode: BuildMode | null;
+  onBuildMode?: (mode: BuildMode) => void;
+  onBuy?: (action: Action) => void;
+}) {
+  return (
+    <div className="wood-panel p-2">
+      <p className="mb-1 text-[10px] tracking-[0.2em] uppercase text-[#d4a017]">Construir</p>
+      <div className="grid grid-cols-2 gap-1">
+        <BuildChoice
+          label="Estrada"
+          parts={["wood", "brick"]}
+          enabled={legal.some((a) => a.type === "BUILD_ROAD")}
+          pressed={buildMode === "road"}
+          onClick={() => onBuildMode?.("road")}
+        />
+        <BuildChoice
+          label="Aldeia"
+          parts={["wood", "brick", "sheep", "wheat"]}
+          enabled={legal.some((a) => a.type === "BUILD_SETTLEMENT")}
+          pressed={buildMode === "settlement"}
+          onClick={() => onBuildMode?.("settlement")}
+        />
+        <BuildChoice
+          label="Cidade"
+          parts={["wheat", "wheat", "ore", "ore", "ore"]}
+          enabled={legal.some((a) => a.type === "BUILD_CITY")}
+          pressed={buildMode === "city"}
+          onClick={() => onBuildMode?.("city")}
+        />
+        <BuildChoice
+          label="Carta"
+          parts={["sheep", "wheat", "ore"]}
+          enabled={legal.some((a) => a.type === "BUY_DEV")}
+          pressed={false}
+          onClick={() => {
+            const buy = legal.find((a) => a.type === "BUY_DEV");
+            if (buy) onBuy?.(buy);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function ResourceStrip({ resources }: { resources: ResourceMap }) {
+  return (
+    <div className="flex shrink-0 gap-0.5">
+      {RESOURCES.map((r) => (
+        <span key={r} className="grid w-7 place-items-center leading-none">
+          <img src={CHIP_SPRITE[r]} alt={RESOURCE_LABEL[r]} className="pixelated size-5" />
+          <span className="text-[10px]">{resources[r]}</span>
+        </span>
+      ))}
+    </div>
   );
 }
 

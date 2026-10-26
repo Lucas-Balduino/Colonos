@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { BoardView } from "./BoardView.tsx";
 import type { BuildMode } from "./copy.ts";
-import { Hud } from "./Hud.tsx";
+import { BuildPanel, Hud, ResourceStrip } from "./Hud.tsx";
 import { projectStateFor } from "../core/view.ts";
 import { whoseTurn } from "../ai/bot.ts";
+import { emptyResources } from "../core/resources.ts";
 import type { Action, GameState, PlayerId, PublicView } from "../core/types.ts";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet.tsx";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { sfx } from "./audio.ts";
 
@@ -40,6 +42,7 @@ export function TableLayout({
   onLeave: () => void;
 }) {
   const [sheet, setSheet] = useState(false);
+  const [buildOpen, setBuildOpen] = useState(false);
   const [pendingRobberHex, setPendingRobberHex] = useState<string | null>(null);
   const [buildMode, setBuildMode] = useState<BuildMode | null>(null);
 
@@ -82,9 +85,22 @@ export function TableLayout({
 
   const chooseBuild = (mode: BuildMode) => setBuildMode((prev) => (prev === mode ? null : mode));
 
+  const you = view.players.find((p) => p.isYou);
+  const resources = you?.resources ?? emptyResources();
+  const discardPending = view.phase.type === "discard" && Boolean(you && view.phase.queue.includes(you.id));
+  const roll = view.legal.find((a) => a.type === "ROLL");
+  const end = view.legal.find((a) => a.type === "END_TURN");
+  const primary = roll
+    ? { label: "Rolar dados", run: () => dispatch(roll) }
+    : discardPending
+      ? { label: "Descartar", run: () => setSheet(true) }
+      : end
+        ? { label: "Encerrar turno", run: () => dispatch(end) }
+        : null;
+
   return (
-    <div className="flex min-h-dvh flex-col bg-[#0a1c26] md:flex-row">
-      <div className="relative min-h-[58vh] flex-1 md:min-h-dvh">
+    <div className="flex h-dvh flex-col overflow-hidden bg-[#0a1c26] md:flex-row">
+      <div className="relative min-h-0 flex-1">
         <BoardView
           view={view}
           onAction={dispatch}
@@ -96,30 +112,59 @@ export function TableLayout({
         <button type="button" className="wood-panel absolute top-3 left-3 z-10 px-3 py-1 text-xs" onClick={onLeave}>
           Sair
         </button>
-        <div className="absolute right-3 bottom-14 z-10 md:hidden">
-          <Button size="sm" onClick={() => setSheet(true)}>
-            Mesa
+        <Sheet open={sheet} onOpenChange={setSheet}>
+          <SheetContent
+            side="bottom"
+            className="max-h-[78vh] overflow-y-auto border-[#8a6410] bg-[#3d2a1f] p-0"
+            showCloseButton
+          >
+            <SheetHeader className="sr-only">
+              <SheetTitle>Ações da mesa</SheetTitle>
+            </SheetHeader>
+            <Hud
+              view={view}
+              onAction={dispatch}
+              interactive={interactive}
+              pendingRobberHex={pendingRobberHex}
+              buildMode={buildMode}
+              onBuildMode={chooseBuild}
+            />
+          </SheetContent>
+        </Sheet>
+      </div>
+      <div className="flex h-16 shrink-0 items-center gap-1 border-t-2 border-[#8a6410] bg-[#1a1520] px-1 md:hidden">
+        <ResourceStrip resources={resources} />
+        {primary ? (
+          <Button className="h-11 min-w-0 flex-1 px-2 text-xs" onClick={primary.run}>
+            {primary.label}
           </Button>
-          <Sheet open={sheet} onOpenChange={setSheet}>
-            <SheetContent
-              side="bottom"
-              className="max-h-[78vh] overflow-y-auto border-[#8a6410] bg-[#3d2a1f] p-0"
-              showCloseButton
-            >
-              <SheetHeader className="sr-only">
-                <SheetTitle>Ações da mesa</SheetTitle>
-              </SheetHeader>
-              <Hud
-                view={view}
-                onAction={dispatch}
-                interactive={interactive}
-                pendingRobberHex={pendingRobberHex}
-                buildMode={buildMode}
-                onBuildMode={chooseBuild}
-              />
-            </SheetContent>
-          </Sheet>
-        </div>
+        ) : (
+          <span className="flex-1" />
+        )}
+        <Popover open={buildOpen} onOpenChange={setBuildOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="secondary" className="h-11 px-2 text-xs">
+              Construir
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent side="top" className="w-64">
+            <BuildPanel
+              legal={view.legal}
+              buildMode={buildMode}
+              onBuildMode={(mode) => {
+                chooseBuild(mode);
+                setBuildOpen(false);
+              }}
+              onBuy={(action) => {
+                dispatch(action);
+                setBuildOpen(false);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+        <Button variant="secondary" className="h-11 px-2 text-xs" onClick={() => setSheet(true)}>
+          Mesa
+        </Button>
       </div>
       <div className="wood-dock hidden md:flex md:h-dvh">
         <Hud
