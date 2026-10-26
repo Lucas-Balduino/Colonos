@@ -5,8 +5,9 @@ import { createGame, reduce } from "../core/reduce.ts";
 import { projectStateFor } from "../core/view.ts";
 import type { Action, CreateGameOptions, GameEvent, GameState, PlayerId, PublicView } from "../core/types.ts";
 import { fxRemainingMs, type EventBatch } from "./fx/batch.ts";
+import { clearSoloSave, writeSoloSave } from "./solo-save.ts";
 
-export function useLocalGame(opts: CreateGameOptions, viewerId: PlayerId, initial?: GameState) {
+export function useLocalGame(opts: CreateGameOptions, viewerId: PlayerId, initial?: GameState, persist = false) {
   const [state, setState] = useState<GameState>(() => initial ?? createGame(opts));
   const [events, setEvents] = useState<EventBatch>({ seq: 0, events: [] });
   const stateRef = useRef(state);
@@ -73,8 +74,9 @@ export function useLocalGame(opts: CreateGameOptions, viewerId: PlayerId, initia
     if (!actor?.isBot) return;
     const act = nextBotAction(state);
     if (!act || act.type === "ACCEPT_TRADE" || act.type === "REJECT_TRADE") return;
+    const setupPiece = state.phase.type === "setupSettlement" || state.phase.type === "setupRoad";
     const remaining = fxRemainingMs();
-    const delay = remaining > 0 ? Math.min(900, remaining) : Math.min(900, botDelayMs());
+    const delay = setupPiece ? 900 : remaining > 0 ? Math.min(900, remaining) : Math.min(900, botDelayMs());
     const timer = window.setTimeout(() => {
       const current = nextBotAction(stateRef.current);
       if (!current || current.type === "ACCEPT_TRADE" || current.type === "REJECT_TRADE") return;
@@ -83,6 +85,15 @@ export function useLocalGame(opts: CreateGameOptions, viewerId: PlayerId, initia
     }, delay);
     return () => window.clearTimeout(timer);
   }, [state, publish]);
+
+  useEffect(() => {
+    if (!persist) return;
+    if (state.phase.type === "gameOver") {
+      clearSoloSave();
+      return;
+    }
+    writeSoloSave({ state, opts });
+  }, [persist, state, opts]);
 
   const view: PublicView = projectStateFor(state, viewerId);
   return { state, view, dispatch, viewerId, setState, events };

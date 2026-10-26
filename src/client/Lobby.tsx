@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
-import type { CreateGameOptions } from "../core/types.ts";
+import type { CreateGameOptions, GameState } from "../core/types.ts";
 import { isMuted, setMuted, sfx } from "./audio.ts";
 import { preloadSprites } from "./preload.ts";
+import { readSoloSave } from "./solo-save.ts";
 
 export type LobbyIntent =
-  | { mode: "solo"; opts: CreateGameOptions; viewerId: string }
+  | { mode: "solo"; opts: CreateGameOptions; viewerId: string; initial?: GameState }
   | { mode: "hotseat"; opts: CreateGameOptions; viewerId: string }
   | { mode: "host"; name: string; bots: number; setup: "beginner" | "random" }
   | { mode: "join"; name: string; code: string };
@@ -21,6 +22,7 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
   const [bots, setBots] = useState(3);
   const [mute, setMute] = useState(isMuted());
   const [more, setMore] = useState<"none" | "hotseat" | "web">("none");
+  const [saved] = useState(() => readSoloSave());
 
   useEffect(() => {
     preloadSprites();
@@ -64,6 +66,17 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
       />
       <div className="lobby-vignette absolute inset-0" />
       <div className="relative mx-auto flex min-h-dvh max-w-lg flex-col justify-end gap-4 p-4 pb-8 sm:justify-center">
+        {saved ? (
+          <Button
+            className="h-12 w-full text-base"
+            onClick={() => {
+              sfx("click");
+              onStart({ mode: "solo", opts: saved.opts, viewerId: "p1", initial: saved.state });
+            }}
+          >
+            Continuar partida
+          </Button>
+        ) : null}
         <header className="text-center">
           <img
             src="/sprites/wordmark.png"
@@ -72,8 +85,7 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
           />
           <p className="text-gold mt-2 text-xs tracking-[0.38em] uppercase">Ilha das Lanternas</p>
           <p className="text-parchment mx-auto mt-3 max-w-md text-sm drop-shadow-[0_1px_4px_#0d0a10]">
-            Uma mesa de madeira, tiles de três polegadas, lanternas na costa. Funde aldeias, abre estradas e chegue a
-            10 pontos. Regras base de Catan.
+            Funde aldeias, abra estradas e chegue a 10 pontos.
           </p>
         </header>
 
@@ -127,7 +139,7 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
         {more === "hotseat" ? (
           <section className="wood-panel p-4">
             <h2 className="text-lg">Hot-seat</h2>
-            <p className="text-muted-foreground mb-3 text-sm">Passem o rato. 3 ou 4 humanos, sem bots.</p>
+            <p className="text-muted-foreground mb-3 text-sm">Passem o aparelho. 3 ou 4 pessoas, sem bots.</p>
             <div className="mb-3 flex gap-2">
               {[3, 4].map((n) => (
                 <Button key={n} size="sm" variant={hotseats === n ? "default" : "outline"} onClick={() => setHotseats(n)}>

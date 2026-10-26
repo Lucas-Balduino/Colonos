@@ -710,6 +710,10 @@ export function BoardView({
   const yourTurn = Boolean(you && you === view.currentPlayerId);
   const hint = boardHint(view, settleTargets.size, cityTargets.size, roadTargets.size, robberTargets.size);
   const active = armed ?? hover;
+  const produce =
+    view.phase.type === "setupSettlement" && active?.kind === "vertex" && settleTargets.has(active.id)
+      ? productionTip(view.board, active.id)
+      : null;
   const canClick = Boolean(
     active &&
       ((active.kind === "vertex" && (settleTargets.has(active.id) || cityTargets.has(active.id))) ||
@@ -885,6 +889,7 @@ export function BoardView({
           ) : settleTargets.size + cityTargets.size + roadTargets.size + robberTargets.size > 0 ? (
             <span className="mt-0.5 block">{hint}</span>
           ) : null}
+          {produce ? <span className="mt-0.5 block">{produce}</span> : null}
         </p>
       </div>
       <div
@@ -897,6 +902,20 @@ export function BoardView({
       {!textures ? <TableLoading progress={progress} /> : null}
     </div>
   );
+}
+
+const PIPS: Record<number, number> = { 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1 };
+
+function productionTip(board: Board, vertexId: string): string {
+  const vertex = board.vertices[vertexId];
+  if (!vertex) return "Produz: nada neste ponto.";
+  const parts: string[] = [];
+  for (const hexId of vertex.hexes) {
+    const hex = board.hexes[hexId];
+    if (!hex || hex.terrain === "desert" || hex.number == null) continue;
+    parts.push(`${RESOURCE_LABEL[hex.terrain].toLowerCase()} ${"●".repeat(PIPS[hex.number] ?? 0)}`);
+  }
+  return parts.length > 0 ? `Produz: ${parts.join(", ")}` : "Produz: nada neste ponto.";
 }
 
 function boardHint(

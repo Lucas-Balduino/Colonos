@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BoardView } from "./BoardView.tsx";
 import type { BuildMode } from "./copy.ts";
+import { GameOver } from "./GameOver.tsx";
 import { BuildPanel, Hud, ResourceStrip } from "./Hud.tsx";
 import { projectStateFor } from "../core/view.ts";
 import { whoseTurn } from "../ai/bot.ts";
@@ -16,6 +17,7 @@ export function GameScreen({
   viewerId,
   onAction,
   onLeave,
+  onReplay,
   hotseat,
   events,
 }: {
@@ -23,14 +25,35 @@ export function GameScreen({
   viewerId: PlayerId;
   onAction: (a: Action) => boolean | void;
   onLeave: () => void;
+  onReplay?: () => void;
   hotseat?: boolean;
   events: EventBatch;
 }) {
-  const effectiveId = hotseat ? whoseTurn(state) : viewerId;
+  const turnId = whoseTurn(state);
+  const [revealed, setRevealed] = useState(turnId);
+  const passing = Boolean(hotseat && state.phase.type !== "gameOver" && turnId !== revealed);
+  const effectiveId = hotseat ? (passing ? revealed : turnId) : viewerId;
   const view = projectStateFor(state, effectiveId);
-  const interactive = hotseat || whoseTurn(state) === viewerId;
+  const interactive = !passing && (hotseat || turnId === viewerId);
+  const nextName = state.players.find((player) => player.id === turnId)?.name ?? "o próximo";
   return (
-    <TableLayout view={view} onAction={onAction} interactive={interactive} onLeave={onLeave} events={events} />
+    <>
+      <TableLayout view={view} onAction={onAction} interactive={interactive} onLeave={onLeave} events={events} />
+      {passing ? (
+        <div data-pass-screen className="fixed inset-0 z-[70] flex items-center justify-center bg-[#0d0a10] px-6">
+          <div className="wood-panel w-full max-w-sm p-6 text-center">
+            <p className="text-xl">Passe para {nextName}</p>
+            <p className="text-muted-foreground mt-2 text-sm">A mão só aparece depois da confirmação.</p>
+            <Button className="mt-4 h-11 w-full" onClick={() => setRevealed(turnId)}>
+              Sou {nextName}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {state.phase.type === "gameOver" && onReplay ? (
+        <GameOver state={state} onReplay={onReplay} onLobby={onLeave} />
+      ) : null}
+    </>
   );
 }
 

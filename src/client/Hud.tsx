@@ -9,6 +9,7 @@ import { sfx } from "./audio.ts";
 import type { BuildMode } from "./copy.ts";
 import type { EventBatch } from "./fx/batch.ts";
 import { useHeldResources } from "./fx/held.ts";
+import { HowToPlay } from "./HowToPlay.tsx";
 
 export function Hud({
   view,
@@ -67,7 +68,10 @@ export function Hud({
             <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Ilha das Lanternas</p>
             <h2 className="text-xl leading-none">Colonos</h2>
           </div>
-          <DicePair faces={view.dice ?? [1, 1]} rolling={false} empty={!view.dice} />
+          <div className="flex items-center gap-2">
+            <HowToPlay />
+            <DicePair faces={view.dice ?? [1, 1]} rolling={false} empty={!view.dice} />
+          </div>
         </div>
         {view.winnerId ? (
           <p className="bg-primary text-primary-foreground mt-2 px-2 py-1 text-center text-xs">

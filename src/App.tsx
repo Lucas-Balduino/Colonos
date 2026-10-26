@@ -6,11 +6,22 @@ import { GameScreen, TableLayout } from "./client/GameScreen.tsx";
 import { useLocalGame } from "./client/useLocalGame.ts";
 import { useNetGame } from "./client/useNetGame.ts";
 import { buildScenario, isScenarioName, type ScenarioName } from "./dev/scenarios.ts";
+import { clearSoloSave } from "./client/solo-save.ts";
 import type { CreateGameOptions, GameState } from "./core/types.ts";
+
+type LocalScreen = {
+  kind: "local";
+  opts: CreateGameOptions;
+  viewerId: string;
+  hotseat: boolean;
+  initial?: GameState;
+  persist: boolean;
+  id: number;
+};
 
 type Screen =
   | { kind: "lobby" }
-  | { kind: "local"; opts: CreateGameOptions; viewerId: string; hotseat: boolean }
+  | LocalScreen
   | { kind: "net"; intent: Extract<LobbyIntent, { mode: "host" } | { mode: "join" }> }
   | { kind: "scene"; name: ScenarioName };
 
@@ -32,9 +43,24 @@ export default function App() {
         <Lobby
           onStart={(intent) => {
             if (intent.mode === "solo") {
-              setScreen({ kind: "local", opts: intent.opts, viewerId: intent.viewerId, hotseat: false });
+              setScreen({
+                kind: "local",
+                opts: intent.opts,
+                viewerId: intent.viewerId,
+                hotseat: false,
+                initial: intent.initial,
+                persist: true,
+                id: Date.now(),
+              });
             } else if (intent.mode === "hotseat") {
-              setScreen({ kind: "local", opts: intent.opts, viewerId: intent.viewerId, hotseat: true });
+              setScreen({
+                kind: "local",
+                opts: intent.opts,
+                viewerId: intent.viewerId,
+                hotseat: true,
+                persist: false,
+                id: Date.now(),
+              });
             } else {
               setScreen({ kind: "net", intent });
             }
@@ -43,10 +69,21 @@ export default function App() {
       ) : null}
       {screen.kind === "local" ? (
         <LocalMatch
+          key={screen.id}
           opts={screen.opts}
           viewerId={screen.viewerId}
           hotseat={screen.hotseat}
+          initial={screen.initial}
+          persist={screen.persist}
           onLeave={() => setScreen({ kind: "lobby" })}
+          onReplay={() =>
+            setScreen({
+              ...screen,
+              id: screen.id + 1,
+              initial: undefined,
+              opts: { ...screen.opts, seed: (Date.now() >>> 0) || 1 },
+            })
+          }
         />
       ) : null}
       {screen.kind === "net" ? (
@@ -71,21 +108,32 @@ function LocalMatch({
   viewerId,
   hotseat,
   onLeave,
+  onReplay,
   initial,
+  persist,
 }: {
   opts: CreateGameOptions;
   viewerId: string;
   hotseat: boolean;
   onLeave: () => void;
+  onReplay: () => void;
   initial?: GameState;
+  persist: boolean;
 }) {
-  const { state, dispatch, events } = useLocalGame(opts, viewerId, initial);
+  const { state, dispatch, events } = useLocalGame(opts, viewerId, initial, persist);
   return (
     <GameScreen
       state={state}
       viewerId={viewerId}
       onAction={dispatch}
-      onLeave={onLeave}
+      onLeave={() => {
+        if (persist && state.phase.type !== "gameOver") {
+          if (!window.confirm("Sair da partida? O jogo salvo neste aparelho será apagado.")) return;
+          clearSoloSave();
+        }
+        onLeave();
+      }}
+      onReplay={onReplay}
       hotseat={hotseat}
       events={events}
     />
@@ -104,8 +152,20 @@ const SCENE_OPTS: CreateGameOptions = {
 };
 
 function SceneMatch({ name, onLeave }: { name: ScenarioName; onLeave: () => void }) {
-  const [initial] = useState(() => buildScenario(name));
-  return <LocalMatch opts={SCENE_OPTS} viewerId="p1" hotseat={false} onLeave={onLeave} initial={initial} />;
+  const [boot] = useState(() => buildScenario(name));
+  const [round, setRound] = useState({ n: 0, seed: SCENE_OPTS.seed ?? 7 });
+  return (
+    <LocalMatch
+      key={round.n}
+      opts={{ ...SCENE_OPTS, seed: round.seed }}
+      viewerId="p1"
+      hotseat={false}
+      onLeave={onLeave}
+      onReplay={() => setRound((value) => ({ n: value.n + 1, seed: (Date.now() >>> 0) || 1 }))}
+      initial={round.n === 0 ? boot : undefined}
+      persist={false}
+    />
+  );
 }
 
 function NetMatch({
