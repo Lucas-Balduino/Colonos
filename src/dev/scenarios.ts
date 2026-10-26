@@ -165,6 +165,13 @@ export function buildScenario(name: ScenarioName): GameState {
       { type: "monopoly", playable: true },
       { type: "roadBuilding", playable: true },
     ];
+    for (const id of ["p2", "p3", "p4"] as const) {
+      const bot = player(state, id);
+      if (bot.resources.wheat < 1) {
+        bot.resources.wheat += 1;
+        state.bank.wheat = Math.max(0, state.bank.wheat - 1);
+      }
+    }
     return state;
   }
 

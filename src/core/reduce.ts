@@ -2,6 +2,7 @@ import { createBeginnerBoard, createRandomBoard, hexesOfVertex } from "./board.t
 import { nextInt, shuffle } from "./rng.ts";
 import {
   COSTS,
+  RESOURCE_LABEL,
   addTo,
   cloneResources,
   countResources,
@@ -58,6 +59,10 @@ function takeFromBank(state: GameState, player: Player, gain: Partial<ResourceMa
   addTo(player.resources, gain);
 }
 
+function recurso(resource: Resource): string {
+  return RESOURCE_LABEL[resource].toLowerCase();
+}
+
 function produce(state: GameState, total: number): void {
   const claims: Array<{ player: Player; resource: Resource; n: number }> = [];
   for (const hex of Object.values(state.board.hexes)) {
@@ -73,20 +78,33 @@ function produce(state: GameState, total: number): void {
       claims.push({ player, resource: res, n });
     }
   }
-  const needed: ResourceMap = emptyResources();
-  for (const c of claims) needed[c.resource] += c.n;
-  for (const r of Object.keys(needed) as Resource[]) {
-    if (needed[r] > state.bank[r]) {
-      log(state, `Banco sem ${r} suficiente — ninguém recebe.`);
-      for (const c of claims) {
-        if (c.resource === r) c.n = 0;
+  for (const resource of ["wood", "brick", "sheep", "wheat", "ore"] as Resource[]) {
+    const owedBy = new Map<PlayerId, { player: Player; n: number }>();
+    for (const claim of claims) {
+      if (claim.resource !== resource) continue;
+      const row = owedBy.get(claim.player.id) ?? { player: claim.player, n: 0 };
+      row.n += claim.n;
+      owedBy.set(claim.player.id, row);
+    }
+    const receivers = [...owedBy.values()].filter((row) => row.n > 0);
+    if (receivers.length === 0) continue;
+    const owed = receivers.reduce((sum, row) => sum + row.n, 0);
+    if (owed <= state.bank[resource]) {
+      for (const row of receivers) {
+        subFrom(state.bank, { [resource]: row.n });
+        addTo(row.player.resources, { [resource]: row.n });
+      }
+      continue;
+    }
+    log(state, `O banco não tem ${recurso(resource)} suficiente.`);
+    if (receivers.length === 1) {
+      const row = receivers[0]!;
+      const give = Math.min(row.n, state.bank[resource]);
+      if (give > 0) {
+        subFrom(state.bank, { [resource]: give });
+        addTo(row.player.resources, { [resource]: give });
       }
     }
-  }
-  for (const c of claims) {
-    if (c.n <= 0) continue;
-    const give = { [c.resource]: c.n } as Partial<ResourceMap>;
-    if (subFrom(state.bank, give)) addTo(c.player.resources, give);
   }
 }
 
@@ -197,7 +215,7 @@ function stealOne(state: GameState, thief: Player, fromId: PlayerId): void {
   const res = bag[pick.value]!;
   victim.resources[res] -= 1;
   thief.resources[res] += 1;
-  log(state, `${thief.name} roubou um recurso de ${victim.name}.`, thief.id);
+  log(state, `${thief.name} roubou uma carta de ${victim.name}.`, thief.id);
 }
 
 function nextTurn(state: GameState): void {
@@ -314,7 +332,7 @@ function apply(state: GameState, action: Action): void {
       if (state.bank[action.take] < 1) throw new RuleError("bank-empty", "Banco sem esse recurso.");
       pay(state, p, cost, "comércio marítimo");
       takeFromBank(state, p, { [action.take]: 1 });
-      log(state, `${p.name} trocou ${ratio} ${action.give} por 1 ${action.take}.`, p.id);
+      log(state, `${p.name} trocou ${ratio} ${recurso(action.give)} por 1 ${recurso(action.take)}.`, p.id);
       return;
     }
     case "OFFER_TRADE": {
@@ -458,14 +476,14 @@ function apply(state: GameState, action: Action): void {
         p.resources[action.resource] += other.resources[action.resource];
         other.resources[action.resource] = 0;
       }
-      log(state, `${p.name} monopolizou ${action.resource} (${taken}).`, p.id);
+      log(state, `${p.name} monopolizou ${recurso(action.resource)} (${taken}).`, p.id);
       return;
     }
     case "END_TURN": {
       const p = assertCurrent(state, action.playerId);
       if (state.phase.type !== "main") throw new RuleError("phase", "Termine o turno só na fase principal.");
-      if (state.phase.type === "main") nextTurn(state);
       log(state, `${p.name} passou o turno.`, p.id);
+      nextTurn(state);
       return;
     }
     default: {

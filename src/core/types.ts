@@ -186,6 +186,7 @@ export interface PublicPlayerView {
   isYou: boolean;
   resources?: ResourceMap;
   devCards?: DevCard[];
+  bankRatios?: Record<Resource, 2 | 3 | 4>;
 }
 
 export interface PublicView {

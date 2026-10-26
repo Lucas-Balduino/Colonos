@@ -1,7 +1,14 @@
 import { legalActions } from "./legal.ts";
 import { countResources } from "./resources.ts";
+import { bestBankRatio } from "./rules.ts";
 import { visibleVictoryPoints } from "./scoring.ts";
-import type { GameState, PlayerId, PublicView } from "./types.ts";
+import { RESOURCES, type GameState, type Player, type PlayerId, type PublicView, type Resource } from "./types.ts";
+
+function bankRatiosFor(state: GameState, player: Player): Record<Resource, 2 | 3 | 4> {
+  const ratios = {} as Record<Resource, 2 | 3 | 4>;
+  for (const resource of RESOURCES) ratios[resource] = bestBankRatio(state, player, resource);
+  return ratios;
+}
 
 export function projectStateFor(state: GameState, viewerId: PlayerId | null): PublicView {
   const current = state.players[state.currentPlayerIndex]!;
@@ -25,6 +32,7 @@ export function projectStateFor(state: GameState, viewerId: PlayerId | null): Pu
         isYou,
         resources: isYou ? p.resources : undefined,
         devCards: isYou ? p.devCards : undefined,
+        bankRatios: isYou ? bankRatiosFor(state, p) : undefined,
       };
     }),
     currentPlayerId: current.id,

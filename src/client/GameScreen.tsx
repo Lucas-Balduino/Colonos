@@ -39,6 +39,7 @@ export function TableLayout({
   onLeave: () => void;
 }) {
   const [sheet, setSheet] = useState(false);
+  const [pendingRobberHex, setPendingRobberHex] = useState<string | null>(null);
 
   const dispatch = (a: Action) => {
     if (
@@ -57,7 +58,12 @@ export function TableLayout({
   return (
     <div className="flex min-h-dvh flex-col bg-[#0a1c26] md:flex-row">
       <div className="relative min-h-[58vh] flex-1 md:min-h-dvh">
-        <BoardView view={view} onAction={dispatch} interactive={interactive} />
+        <BoardView
+          view={view}
+          onAction={dispatch}
+          interactive={interactive}
+          onPendingRobber={setPendingRobberHex}
+        />
         <button type="button" className="wood-panel absolute top-3 left-3 z-10 px-3 py-1 text-xs" onClick={onLeave}>
           Sair
         </button>
@@ -74,13 +80,13 @@ export function TableLayout({
               <SheetHeader className="sr-only">
                 <SheetTitle>Ações da mesa</SheetTitle>
               </SheetHeader>
-              <Hud view={view} onAction={dispatch} interactive={interactive} />
+              <Hud view={view} onAction={dispatch} interactive={interactive} pendingRobberHex={pendingRobberHex} />
             </SheetContent>
           </Sheet>
         </div>
       </div>
       <div className="wood-dock hidden md:flex md:h-dvh">
-        <Hud view={view} onAction={dispatch} interactive={interactive} />
+        <Hud view={view} onAction={dispatch} interactive={interactive} pendingRobberHex={pendingRobberHex} />
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog.tsx";
 import { ScrollArea } from "@/components/ui/scroll-area.tsx";
 import { RESOURCES, RESOURCE_LABEL, COSTS, countResources, emptyResources } from "../core/index.ts";
 import type { Action, PublicView, Resource, ResourceMap } from "../core/types.ts";
@@ -11,16 +12,21 @@ export function Hud({
   view,
   onAction,
   interactive,
+  pendingRobberHex = null,
 }: {
   view: PublicView;
   onAction: (a: Action) => boolean | void;
   interactive: boolean;
+  pendingRobberHex?: string | null;
 }) {
   const you = view.players.find((p) => p.isYou);
   const yourTurn = Boolean(you && you.id === view.currentPlayerId);
   const legal = view.legal;
   const [give, setGive] = useState<Resource | null>(null);
   const [discard, setDiscard] = useState<ResourceMap>(emptyResources());
+  const [plentyOpen, setPlentyOpen] = useState(false);
+  const [plentySlots, setPlentySlots] = useState<Array<Resource | null>>([null, null]);
+  const [monopolyOpen, setMonopolyOpen] = useState(false);
   const [rolling, setRolling] = useState(false);
   const [faces, setFaces] = useState<[number, number]>(view.dice ?? [1, 1]);
   const prevDice = useRef(view.dice);
@@ -165,6 +171,7 @@ export function Hud({
                   <img src={CARD_SPRITE[r]} alt="" className="pixelated h-[4.6rem] w-[2.15rem] object-cover" />
                   <span className="resource-seal">{n}</span>
                   <span className="mt-1 text-[9px] leading-none uppercase">{RESOURCE_LABEL[r]}</span>
+                  {you.bankRatios ? <span className="text-[9px] text-[#d4a017]">{you.bankRatios[r]}:1</span> : null}
                   {discardNeed ? <span className="text-[9px] text-[#8a6410]">-{discard[r]}</span> : null}
                   {inCost && n > 0 ? <span className="sr-only">usado nas construções</span> : null}
                 </button>
@@ -216,23 +223,27 @@ export function Hud({
               2 estradas
             </Button>
           ) : null}
-          {legal.some((a) => a.type === "PLAY_MONOPOLY")
-            ? RESOURCES.map((r) => (
-                <Button key={r} size="sm" variant="outline" onClick={() => act({ type: "PLAY_MONOPOLY", playerId: you!.id, resource: r })}>
-                  Monopólio {RESOURCE_LABEL[r]}
-                </Button>
-              ))
-            : null}
-          {legal
-            .filter((a) => a.type === "PLAY_YEAR_OF_PLENTY")
-            .slice(0, 5)
-            .map((a, i) =>
-              a.type === "PLAY_YEAR_OF_PLENTY" ? (
-                <Button key={i} size="sm" variant="outline" onClick={() => act(a)}>
-                  Fartura {RESOURCE_LABEL[a.resources[0]]}+{RESOURCE_LABEL[a.resources[1]]}
-                </Button>
-              ) : null,
-            )}
+          {you?.devCards?.some((c) => c.type === "yearOfPlenty") ? (
+            <Button
+              variant="outline"
+              disabled={!legal.some((a) => a.type === "PLAY_YEAR_OF_PLENTY")}
+              onClick={() => {
+                setPlentySlots([null, null]);
+                setPlentyOpen(true);
+              }}
+            >
+              Jogar Fartura
+            </Button>
+          ) : null}
+          {you?.devCards?.some((c) => c.type === "monopoly") ? (
+            <Button
+              variant="outline"
+              disabled={!legal.some((a) => a.type === "PLAY_MONOPOLY")}
+              onClick={() => setMonopolyOpen(true)}
+            >
+              Jogar Monopólio
+            </Button>
+          ) : null}
           {legal.some((a) => a.type === "END_TURN") ? (
             <Button variant="secondary" className="flex-1" onClick={() => act({ type: "END_TURN", playerId: you!.id })}>
               Encerrar turno
@@ -253,6 +264,21 @@ export function Hud({
           >
             Confirmar descarte
           </Button>
+        </div>
+      ) : null}
+
+      {pendingRobberHex && yourTurn && you ? (
+        <div className="flex flex-wrap gap-2">
+          {legal
+            .filter((a) => a.type === "MOVE_ROBBER" && a.hexId === pendingRobberHex && a.stealFrom)
+            .map((a) =>
+              a.type === "MOVE_ROBBER" && a.stealFrom ? (
+                <Button key={a.stealFrom} onClick={() => act(a)}>
+                  Roubar {view.players.find((p) => p.id === a.stealFrom)?.name} (
+                  {view.players.find((p) => p.id === a.stealFrom)?.resourceCount ?? 0} cartas)
+                </Button>
+              ) : null,
+            )}
         </div>
       ) : null}
 
@@ -303,6 +329,88 @@ export function Hud({
           ))}
         </div>
       ) : null}
+
+      <Dialog open={plentyOpen} onOpenChange={setPlentyOpen}>
+        <DialogContent className="border-[#8a6410] bg-[#3d2a1f] text-[#f4e8c8]">
+          <DialogHeader>
+            <DialogTitle>Ano da Fartura</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm">Escolha duas cartas do banco. Podem ser iguais.</p>
+          <div className="flex gap-2">
+            {plentySlots.map((slot, index) => (
+              <button
+                key={index}
+                type="button"
+                className="resource-card"
+                onClick={() => setPlentySlots((prev) => prev.map((item, i) => (i === index ? null : item)))}
+              >
+                {slot ? <img src={CARD_SPRITE[slot]} alt="" className="pixelated h-16 w-8 object-cover" /> : <span>?</span>}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {RESOURCES.map((r) => {
+              const reserved = plentySlots.filter((slot) => slot === r).length;
+              const disabled = view.bank[r] - reserved <= 0;
+              return (
+                <Button
+                  key={r}
+                  size="sm"
+                  variant="outline"
+                  disabled={disabled}
+                  onClick={() =>
+                    setPlentySlots((prev) => {
+                      const empty = prev.indexOf(null);
+                      if (empty < 0) return prev;
+                      const next = [...prev];
+                      next[empty] = r;
+                      return next;
+                    })
+                  }
+                >
+                  {RESOURCE_LABEL[r]}
+                </Button>
+              );
+            })}
+          </div>
+          <Button
+            disabled={!plentyAction(legal, plentySlots)}
+            onClick={() => {
+              const action = plentyAction(legal, plentySlots);
+              if (!action) return;
+              act(action);
+              setPlentyOpen(false);
+            }}
+          >
+            Pegar
+          </Button>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={monopolyOpen} onOpenChange={setMonopolyOpen}>
+        <DialogContent className="border-[#8a6410] bg-[#3d2a1f] text-[#f4e8c8]">
+          <DialogHeader>
+            <DialogTitle>Monopólio</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm">Escolha o recurso que todo mundo entrega.</p>
+          <div className="flex flex-wrap gap-2">
+            {RESOURCES.map((r) => (
+              <Button
+                key={r}
+                variant="outline"
+                onClick={() => {
+                  const action = legal.find((a) => a.type === "PLAY_MONOPOLY" && a.resource === r);
+                  if (!action) return;
+                  act(action);
+                  setMonopolyOpen(false);
+                }}
+              >
+                {RESOURCE_LABEL[r]}
+              </Button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <div className="parchment-log min-h-24 flex-1 overflow-hidden">
         <ScrollArea className="h-full">
@@ -422,6 +530,19 @@ function DicePair({
       <img src={diceSprite(faces[1])} alt="" className="pixelated size-10" />
       <span className="text-gold text-sm">{faces[0] + faces[1]}</span>
     </div>
+  );
+}
+
+function plentyAction(legal: Action[], slots: Array<Resource | null>): Action | null {
+  const [a, b] = slots;
+  if (!a || !b) return null;
+  return (
+    legal.find(
+      (action) =>
+        action.type === "PLAY_YEAR_OF_PLENTY" &&
+        ((action.resources[0] === a && action.resources[1] === b) ||
+          (action.resources[0] === b && action.resources[1] === a)),
+    ) ?? null
   );
 }
 
