@@ -7,6 +7,7 @@ import { projectStateFor } from "../core/view.ts";
 import { nextBotAction } from "../ai/bot.ts";
 import type { ClientMsg, ServerMsg } from "../protocol.ts";
 import type { GameState, PlayerId } from "../core/types.ts";
+import { parseClientMsg } from "./validate.ts";
 
 const PROD = process.env.NODE_ENV === "production";
 const PORT = Number(process.env.PORT || (PROD ? 43123 : 43124));
@@ -30,6 +31,7 @@ interface Room {
   state: GameState | null;
   sockets: Map<PlayerId, WebSocket>;
   botTimer?: ReturnType<typeof setTimeout>;
+  lastSeen: number;
 }
 
 const rooms = new Map<string, Room>();
@@ -81,19 +83,17 @@ function scheduleBots(room: Room): void {
   }, 520);
 }
 
-function handle(ws: WebSocket, raw: string, ctx: { playerId?: PlayerId; room?: Room; token?: string }): void {
-  let msg: ClientMsg;
-  try {
-    msg = JSON.parse(raw) as ClientMsg;
-  } catch {
-    send(ws, { type: "error", message: "Mensagem inválida." });
-    return;
-  }
+function hasHumanSocket(room: Room): boolean {
+  return room.seats.some((s) => !s.isBot && room.sockets.has(s.id));
+}
+
+function handle(ws: WebSocket, msg: ClientMsg, ctx: { playerId?: PlayerId; room?: Room; token?: string }): void {
+  if (ctx.room) ctx.room.lastSeen = Date.now();
 
   if (msg.type === "create") {
     const c = code();
     const hostId = "p1";
-    const token = `${c}-p1-${Math.random().toString(36).slice(2, 8)}`;
+    const token = crypto.randomUUID();
     const seats: Seat[] = [
       { id: hostId, name: msg.name || "Anfitrião", color: COLORS[0]!, isBot: false, token },
     ];
@@ -112,6 +112,7 @@ function handle(ws: WebSocket, raw: string, ctx: { playerId?: PlayerId; room?: R
       setup: msg.setup,
       state: null,
       sockets: new Map([[hostId, ws]]),
+      lastSeen: Date.now(),
     };
     rooms.set(c, room);
     ctx.playerId = hostId;
@@ -128,6 +129,7 @@ function handle(ws: WebSocket, raw: string, ctx: { playerId?: PlayerId; room?: R
       send(ws, { type: "error", message: "Sala não encontrada." });
       return;
     }
+    room.lastSeen = Date.now();
     if (msg.token) {
       const seat = room.seats.find((s) => s.token === msg.token);
       if (seat) {
@@ -150,7 +152,7 @@ function handle(ws: WebSocket, raw: string, ctx: { playerId?: PlayerId; room?: R
       return;
     }
     const id = `p${room.seats.length + 1}` as PlayerId;
-    const token = `${room.code}-${id}-${Math.random().toString(36).slice(2, 8)}`;
+    const token = crypto.randomUUID();
     room.seats.push({
       id,
       name: msg.name || "Colonista",
@@ -177,6 +179,10 @@ function handle(ws: WebSocket, raw: string, ctx: { playerId?: PlayerId; room?: R
   if (msg.type === "start") {
     if (pid !== room.hostId) {
       send(ws, { type: "error", message: "Só o anfitrião inicia." });
+      return;
+    }
+    if (room.state !== null) {
+      send(ws, { type: "error", message: "A partida já começou." });
       return;
     }
     while (room.seats.length < 3) {
@@ -256,14 +262,39 @@ const server = createServer((req, res) => {
   res.end(readFileSync(file));
 });
 
-const wss = new WebSocketServer({ server, path: "/ws" });
+const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 4096 });
 wss.on("connection", (ws) => {
   const ctx: { playerId?: PlayerId; room?: Room; token?: string } = {};
-  ws.on("message", (data) => handle(ws, String(data), ctx));
+  ws.on("message", (data) => {
+    try {
+      const msg = parseClientMsg(String(data));
+      if (!msg) {
+        send(ws, { type: "error", message: "Mensagem inválida." });
+        return;
+      }
+      handle(ws, msg, ctx);
+    } catch (err) {
+      console.error(err);
+      send(ws, { type: "error", message: "Erro no servidor. Tente de novo." });
+    }
+  });
+  ws.on("error", (err) => {
+    console.error(err);
+  });
   ws.on("close", () => {
     if (ctx.room && ctx.playerId) ctx.room.sockets.delete(ctx.playerId);
   });
 });
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomCode, room] of rooms) {
+    if (!hasHumanSocket(room) && now - room.lastSeen > 30 * 60 * 1000) {
+      if (room.botTimer) clearTimeout(room.botTimer);
+      rooms.delete(roomCode);
+    }
+  }
+}, 60_000);
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Colonos server em :${PORT} (${PROD ? "prod" : "dev ws"})`);

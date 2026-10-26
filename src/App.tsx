@@ -5,15 +5,26 @@ import { Lobby, type LobbyIntent } from "./client/Lobby.tsx";
 import { GameScreen, TableLayout } from "./client/GameScreen.tsx";
 import { useLocalGame } from "./client/useLocalGame.ts";
 import { useNetGame } from "./client/useNetGame.ts";
-import type { CreateGameOptions } from "./core/types.ts";
+import { buildScenario, isScenarioName, type ScenarioName } from "./dev/scenarios.ts";
+import type { CreateGameOptions, GameState } from "./core/types.ts";
 
 type Screen =
   | { kind: "lobby" }
   | { kind: "local"; opts: CreateGameOptions; viewerId: string; hotseat: boolean }
-  | { kind: "net"; intent: Extract<LobbyIntent, { mode: "host" } | { mode: "join" }> };
+  | { kind: "net"; intent: Extract<LobbyIntent, { mode: "host" } | { mode: "join" }> }
+  | { kind: "scene"; name: ScenarioName };
+
+function sceneFromUrl(): ScenarioName | null {
+  if (!import.meta.env.DEV) return null;
+  const name = new URLSearchParams(window.location.search).get("cena");
+  return name && isScenarioName(name) ? name : null;
+}
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>({ kind: "lobby" });
+  const [screen, setScreen] = useState<Screen>(() => {
+    const scene = sceneFromUrl();
+    return scene ? { kind: "scene", name: scene } : { kind: "lobby" };
+  });
 
   return (
     <>
@@ -41,6 +52,15 @@ export default function App() {
       {screen.kind === "net" ? (
         <NetMatch intent={screen.intent} onLeave={() => setScreen({ kind: "lobby" })} />
       ) : null}
+      {screen.kind === "scene" ? (
+        <SceneMatch
+          name={screen.name}
+          onLeave={() => {
+            window.history.replaceState({}, "", window.location.pathname);
+            setScreen({ kind: "lobby" });
+          }}
+        />
+      ) : null}
       <Toaster />
     </>
   );
@@ -51,16 +71,34 @@ function LocalMatch({
   viewerId,
   hotseat,
   onLeave,
+  initial,
 }: {
   opts: CreateGameOptions;
   viewerId: string;
   hotseat: boolean;
   onLeave: () => void;
+  initial?: GameState;
 }) {
-  const { state, dispatch } = useLocalGame(opts, viewerId);
+  const { state, dispatch } = useLocalGame(opts, viewerId, initial);
   return (
     <GameScreen state={state} viewerId={viewerId} onAction={dispatch} onLeave={onLeave} hotseat={hotseat} />
   );
+}
+
+const SCENE_OPTS: CreateGameOptions = {
+  setup: "beginner",
+  seed: 7,
+  players: [
+    { id: "p1", name: "Você", color: "#c44536", isBot: false },
+    { id: "p2", name: "Marinheiro", color: "#2b6cb0", isBot: true },
+    { id: "p3", name: "Lenhadora", color: "#d97706", isBot: true },
+    { id: "p4", name: "Mineiro", color: "#e8e0d0", isBot: true },
+  ],
+};
+
+function SceneMatch({ name, onLeave }: { name: ScenarioName; onLeave: () => void }) {
+  const [initial] = useState(() => buildScenario(name));
+  return <LocalMatch opts={SCENE_OPTS} viewerId="p1" hotseat={false} onLeave={onLeave} initial={initial} />;
 }
 
 function NetMatch({

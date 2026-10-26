@@ -8,6 +8,8 @@
     "dev:client": "vite",
     "dev:server": "tsx watch src/server/index.ts",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --pretty false",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build",
     "lint": "oxlint src",
     "preview": "vite preview",
     "test": "vitest run",

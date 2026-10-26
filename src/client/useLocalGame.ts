@@ -5,8 +5,8 @@ import { createGame, reduce } from "../core/reduce.ts";
 import { projectStateFor } from "../core/view.ts";
 import type { Action, CreateGameOptions, GameState, PlayerId, PublicView } from "../core/types.ts";
 
-export function useLocalGame(opts: CreateGameOptions, viewerId: PlayerId) {
-  const [state, setState] = useState<GameState>(() => createGame(opts));
+export function useLocalGame(opts: CreateGameOptions, viewerId: PlayerId, initial?: GameState) {
+  const [state, setState] = useState<GameState>(() => initial ?? createGame(opts));
   const stateRef = useRef(state);
   stateRef.current = state;
 

@@ -343,11 +343,10 @@ export function BoardView({
     };
   };
 
-  const pickAt = (world: { x: number; y: number }) => {
-    let best: { kind: "vertex" | "edge" | "hex"; id: string; d: number } | null = null;
+  const pickAt = (world: { x: number; y: number }): { kind: "vertex" | "edge" | "hex"; id: string; d: number } | null => {
+    const hits: { kind: "vertex" | "edge" | "hex"; id: string; d: number }[] = [];
     const consider = (kind: "vertex" | "edge" | "hex", id: string, d: number, limit: number) => {
-      if (d > limit) return;
-      if (!best || d < best.d) best = { kind, id, d };
+      if (d <= limit) hits.push({ kind, id, d });
     };
     for (const id of settleTargets) {
       const p = vertexPos(view.board, id);
@@ -370,7 +369,8 @@ export function BoardView({
       const p = pointyHexToPixel(hex, HEX_SIZE);
       consider("hex", id, Math.hypot(world.x - p.x, world.y - p.y), HEX_PICK);
     }
-    return best;
+    if (hits.length === 0) return null;
+    return hits.reduce((best, hit) => (hit.d < best.d ? hit : best));
   };
 
   const onWheel = (e: React.WheelEvent) => {
