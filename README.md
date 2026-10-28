@@ -10,6 +10,8 @@ Identidade visual: paleta de madeira e ouro velho, tiles hexagonais 16-bit com a
 
 Catan é marca da Catan GmbH. Este repositório não é um produto oficial.
 
+Para continuar o trabalho no PC, comece por [HANDOFF.md](HANDOFF.md). O plano, a revisão e as capturas que estavam na nuvem estão em `docs/nuvem/` e `docs/evidencias/`.
+
 ## Rodar localmente
 
 ```bash

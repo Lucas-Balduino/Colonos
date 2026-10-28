@@ -1,0 +1,6 @@
+- [x] [Proposta de arquitetura](/cursor/stores/bc-1dff6be3-e3ee-4c13-bbc1-fa25f3b6e6d6/docs/architecture-rfc.md) — decisões travadas
+- [x] [Motor de regras](https://cursor.com/agents/bc-10cd7a1b-a6cf-588c-b45a-30d168226a44) — núcleo imutável na branch cursor/rules-core-6a44
+- [x] [Cliente solo](https://cursor.com/agents/bc-10cd7a1b-a6cf-588c-b45a-30d168226a44) — hotseat de 3–4 jogadores
+- [x] [Bots do solo](https://cursor.com/agents/bc-10cd7a1b-a6cf-588c-b45a-30d168226a44) — humano contra dois bots
+- [x] [Salas](https://cursor.com/agents/bc-10cd7a1b-a6cf-588c-b45a-30d168226a44) — código de 4 letras, humanos na rede
+- [x] [Catan](https://cursor.com/agents/bc-10cd7a1b-a6cf-588c-b45a-30d168226a44) — solo, hotseat e salas na branch cursor/rules-core-6a44
