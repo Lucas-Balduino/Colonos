@@ -14,7 +14,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "start": "NODE_ENV=production tsx src/server/index.ts",
+    "start": "tsx src/server/index.ts --prod",
+    "sim": "tsx scripts/sim.ts",
     "sprites": "node scripts/generate-sprites.mjs && node scripts/process-art.mjs"
   },
   "dependencies": {

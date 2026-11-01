@@ -17,7 +17,7 @@ import {
   TERRAIN_SPRITE,
 } from "./assets.ts";
 import { sfx } from "./audio.ts";
-import { FACTION_HEX, PALETTE } from "./theme.ts";
+import { FACTION_HEX, PALETTE, shade } from "./theme.ts";
 import { AnimClockProvider, animFrameNow, useAnimFrame } from "./anim-clock.tsx";
 import { buildModeCopy, phaseCopy, type BuildMode } from "./copy.ts";
 import { preloadSprites } from "./preload.ts";
@@ -39,14 +39,15 @@ const HEX_PICK_PX = 40;
 const PORT_PICK = 18;
 const LEVELS = [1, 1.5, 2, 3] as const;
 
-const SEA_EXTENT = (() => {
+/** The land plus room for the docks around it. The camera frames this. */
+const ISLAND_EXTENT = (() => {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (let q = -3; q <= 3; q++) {
-    for (let r = -3; r <= 3; r++) {
-      if (cubeDistance({ q, r }) > 3) continue;
+  for (let q = -2; q <= 2; q++) {
+    for (let r = -2; r <= 2; r++) {
+      if (cubeDistance({ q, r }) > 2) continue;
       const p = pointyHexToPixel({ q, r }, HEX_SIZE);
       for (let i = 0; i < 6; i++) {
         const c = hexCorner(p, HEX_SIZE, i);
@@ -57,14 +58,16 @@ const SEA_EXTENT = (() => {
       }
     }
   }
-  return { width: maxX - minX, height: maxY - minY };
+  const dock = 46;
+  return { width: maxX - minX + dock * 2, height: maxY - minY + dock * 2 };
 })();
 
 function computeFit(w: number, h: number): number {
   if (w < 8 || h < 8) return 1;
-  const raw = Math.min(w / SEA_EXTENT.width, h / SEA_EXTENT.height) * 0.94;
-  const stepped = Math.floor(raw * 4) / 4;
-  return Math.min(2, Math.max(0.5, stepped));
+  const raw = Math.min(w / ISLAND_EXTENT.width, h / (ISLAND_EXTENT.height + 56));
+  // Steps of 1/16 keep the pixel grid even without wasting screen.
+  const stepped = Math.floor(raw * 16) / 16;
+  return Math.min(3, Math.max(0.4, stepped));
 }
 
 type PickKind = "vertex" | "edge" | "hex" | "victim" | "port";
@@ -103,10 +106,11 @@ function portAnchor(board: Board, origin: { x: number; y: number }, edgeId: stri
 
 function seaRing(): { q: number; r: number }[] {
   const out: { q: number; r: number }[] = [];
-  for (let q = -4; q <= 4; q++) {
-    for (let r = -4; r <= 4; r++) {
+  // Enough rings that the water reaches past the screen edge at any zoom.
+  for (let q = -9; q <= 9; q++) {
+    for (let r = -9; r <= 9; r++) {
       const d = cubeDistance({ q, r });
-      if (d === 3 || d === 4) out.push({ q, r });
+      if (d >= 3 && d <= 9) out.push({ q, r });
     }
   }
   return out.sort((a, b) => b.r - a.r || b.q - a.q);
@@ -743,7 +747,7 @@ export function BoardView({
         onClearBuild?.();
       }}
     >
-      <Application resizeTo={host} background={0x0c2433} antialias={false} roundPixels preference="webgl">
+      <Application resizeTo={host} background={0x0b4d66} antialias={false} roundPixels preference="webgl">
         <AnimClockProvider>
         <pixiContainer x={size.w / 2 + pan.x + nudge} y={size.h / 2 + pan.y} scale={zoom}>
           <pixiContainer x={-origin.x} y={-origin.y}>
@@ -927,9 +931,9 @@ function boardHint(
 ): string {
   if (view.winnerId) return "A ilha tem um vencedor.";
   if (robbers) return "Clique num terreno para pousar o ladrão.";
-  if (settles) return "As estacas marcam onde fundar uma aldeia.";
+  if (settles) return "Os anéis marcam onde dá para fundar uma aldeia.";
   if (cities) return "Transforme a aldeia em cidade.";
-  if (roads) return "Toque no rastro de terra junto da aldeia.";
+  if (roads) return "Toque num dos tracejados para abrir a estrada.";
   return "Arraste o mapa. A roda do mouse aproxima.";
 }
 
@@ -1059,62 +1063,46 @@ function DirtTrack({
 }) {
   const draw = useCallback(
     (g: PixiGraphics) => {
-      const pad = 11;
+      // A plank road in the owner's color: dark outline, colored body, a lit
+      // top edge and plank seams. It has to read at a glance from any zoom.
+      const pad = 8;
       const L = Math.max(10, length - pad * 2);
-      const steps = Math.max(4, Math.round(L / 6.5));
       const left = -L / 2;
-      const shown = (x: number) => {
-        if (reveal >= 1) return true;
-        if (from < 0) return x <= left + reveal * L + 0.5;
-        return x >= left + (1 - reveal) * L - 0.5;
-      };
+      const base = FACTION_HEX[color] ?? 0xe8e0d0;
       g.clear();
       if (ghost) {
-        const a = hovered ? 0.34 : 0.14;
-        for (let i = 0; i <= steps; i++) {
-          const u = i / steps;
-          const x = left + u * L;
-          const wobble = Math.sin(i * 1.7) * 0.35;
-          g.ellipse(x, wobble, 4, hovered ? 1.6 : 1.25);
-          g.fill({ color: 0x7a5a38, alpha: a });
-        }
-        if (hovered) {
-          g.roundRect(left + 3, -0.5, L - 6, 1, 0.5);
-          g.fill({ color: PALETTE.gold, alpha: 0.28 });
+        const dash = 5;
+        const gap = 3;
+        // Parchment dashes read on every terrain; the owner's color shows on hover.
+        for (let x = left; x < left + L - 1; x += dash + gap) {
+          const w = Math.min(dash, left + L - x);
+          g.rect(x - 1, -2.5, w + 2, 5);
+          g.fill({ color: 0x1a1208, alpha: 0.85 });
+          g.rect(x, -1.5, w, 3);
+          g.fill({ color: hovered ? base : PALETTE.parchment, alpha: hovered ? 1 : 0.92 });
         }
         return;
       }
-      for (let i = 0; i <= steps; i++) {
-        const u = i / steps;
-        const x = left + u * L;
-        if (!shown(x)) continue;
-        const wobble = Math.sin(i * 2.1) * 0.5;
-        const taper = 1 - Math.abs(u - 0.5) * 0.32;
-        g.ellipse(x, wobble + 0.35, 5.1 * taper, 2.15 * taper);
-        g.fill({ color: 0x4a3424, alpha: 0.58 });
+      const x0 = reveal >= 1 ? left : from < 0 ? left : left + (1 - reveal) * L;
+      const w = reveal >= 1 ? L : Math.max(1, reveal * L);
+      g.rect(x0 - 1, -2, w + 2, 6.5);
+      g.fill({ color: 0x0d0805, alpha: 0.45 });
+      g.rect(x0 - 1, -3.5, w + 2, 7);
+      g.fill({ color: shade(base, -0.62) });
+      g.rect(x0, -2.5, w, 5);
+      g.fill({ color: base });
+      g.rect(x0, -2.5, w, 1.25);
+      g.fill({ color: shade(base, 0.38) });
+      g.rect(x0, 1.5, w, 1);
+      g.fill({ color: shade(base, -0.3) });
+      for (let x = left + 5; x < left + L - 2; x += 5) {
+        if (x < x0 || x > x0 + w) continue;
+        g.rect(x, -2.5, 0.75, 5);
+        g.fill({ color: shade(base, -0.45), alpha: 0.55 });
       }
-      for (let i = 0; i <= steps; i++) {
-        const u = i / steps;
-        const x = left + u * L;
-        if (!shown(x)) continue;
-        const wobble = Math.sin(i * 2.1 + 0.5) * 0.35;
-        const taper = 1 - Math.abs(u - 0.5) * 0.28;
-        g.ellipse(x, wobble, 3.4 * taper, 1.35 * taper);
-        g.fill({ color: 0x9a7a4c, alpha: 0.72 });
-      }
-      if (reveal >= 1) {
-        g.roundRect(left + 1, -0.7, L - 2, 1.4, 0.7);
-      } else {
-        const x0 = from < 0 ? left : left + (1 - reveal) * L;
-        g.roundRect(x0, -0.7, Math.max(1, reveal * L), 1.4, 0.7);
-      }
-      g.fill({ color: 0xb08a58, alpha: 0.4 });
-      if (shown(0)) {
-        const mark = FACTION_HEX[color] ?? 0xe8e0d0;
-        g.ellipse(0, 0.25, 1.7, 1);
-        g.fill({ color: 0x3a2818, alpha: 0.75 });
-        g.ellipse(0, 0.05, 1.15, 0.65);
-        g.fill({ color: mark, alpha: 0.8 });
+      if (hovered) {
+        g.rect(x0 - 2, -4.5, w + 4, 9);
+        g.stroke({ width: 1, color: PALETTE.parchment, alpha: 0.7 });
       }
     },
     [length, color, ghost, hovered, reveal, from],
@@ -1274,17 +1262,35 @@ function NumberToken({
       <pixiText
         text={String(value)}
         anchor={0.5}
-        y={1}
+        y={-2}
+        resolution={4}
         style={{
           fontFamily: "Pixelify Sans, monospace",
-          fontSize: red ? 12 : 11,
-          fill: red ? PALETTE.brick : PALETTE.night,
+          fontSize: red ? 14 : 12,
+          fill: red ? 0xb8281c : PALETTE.night,
           fontWeight: "700",
-          stroke: { color: PALETTE.parchment, width: 3 },
         }}
       />
+      <TokenPips value={value} red={red} />
     </pixiContainer>
   );
+}
+
+/** Dots under the number: how many of the 36 dice rolls hit it. */
+function TokenPips({ value, red }: { value: number; red: boolean }) {
+  const draw = useCallback(
+    (g: PixiGraphics) => {
+      const n = PIPS[value] ?? 0;
+      g.clear();
+      const start = -((n - 1) * 3) / 2;
+      for (let i = 0; i < n; i++) {
+        g.rect(Math.round(start + i * 3) - 1, 7, 2, 2);
+        g.fill({ color: red ? 0xb8281c : PALETTE.night });
+      }
+    },
+    [value, red],
+  );
+  return <pixiGraphics draw={draw} eventMode="none" />;
 }
 
 function FallbackToken() {
@@ -1324,7 +1330,6 @@ const IslandPicture = memo(function IslandPicture({
       {seaRing().map((h) => {
         const p = pointyHexToPixel(h, HEX_SIZE);
         const tex = textures?.["/sprites/hex-sea.png"];
-        const far = cubeDistance(h) === 4;
         return tex ? (
           <pixiSprite
             key={`sea-${h.q},${h.r}`}
@@ -1332,7 +1337,6 @@ const IslandPicture = memo(function IslandPicture({
             x={p.x}
             y={p.y}
             anchor={HEX_SPRITE_ANCHOR}
-            alpha={far ? 0.55 : 1}
             eventMode="none"
           />
         ) : null;
@@ -1366,25 +1370,31 @@ const IslandPicture = memo(function IslandPicture({
         const anchor = portAnchor(board, origin, port.edgeId);
         const url = port.ratio === 3 ? "/sprites/port-any.png" : "/sprites/port-2.png";
         const tex = textures?.[url];
-        const specific = port.ratio === 2 && port.resource !== "any";
+        const specific = port.resource !== "any";
         const chip = specific ? textures?.[CHIP_SPRITE[port.resource]] : undefined;
+        const ends = port.vertices.map((v) => vertexPos(board, v));
         return (
-          <pixiContainer key={port.edgeId} x={anchor.x} y={anchor.y}>
-            {tex ? <pixiSprite texture={tex} anchor={0.5} eventMode="none" /> : null}
-            {chip ? <pixiSprite texture={chip} x={-14} y={16} anchor={0.5} scale={0.75} eventMode="none" /> : null}
-            <pixiText
-              text={port.ratio === 3 ? "3:1" : "2:1"}
-              x={specific ? 12 : 0}
-              y={16}
-              anchor={0.5}
-              eventMode="none"
-              style={{
-                fontFamily: "Pixelify Sans, monospace",
-                fontSize: 9,
-                fill: PALETTE.gold,
-                fontWeight: "700",
-              }}
-            />
+          <pixiContainer key={port.edgeId}>
+            <PortPiers from={anchor} to={ends} />
+            <pixiContainer x={anchor.x} y={anchor.y}>
+              {tex ? <pixiSprite texture={tex} anchor={0.5} scale={0.8} eventMode="none" /> : null}
+              <PortPlaque specific={specific} />
+              {chip ? <pixiSprite texture={chip} x={-8} y={15} anchor={0.5} scale={0.62} eventMode="none" /> : null}
+              <pixiText
+                text={port.ratio === 3 ? "3:1" : "2:1"}
+                x={specific ? 6 : 0}
+                y={15}
+                anchor={0.5}
+                resolution={4}
+                eventMode="none"
+                style={{
+                  fontFamily: "Pixelify Sans, monospace",
+                  fontSize: 10,
+                  fill: 0x2a1c12,
+                  fontWeight: "700",
+                }}
+              />
+            </pixiContainer>
           </pixiContainer>
         );
       })}
@@ -1392,24 +1402,67 @@ const IslandPicture = memo(function IslandPicture({
   );
 });
 
+/** Two plank piers from the dock to the intersections that use the port. */
+function PortPiers({ from, to }: { from: { x: number; y: number }; to: Array<{ x: number; y: number }> }) {
+  const draw = useCallback(
+    (g: PixiGraphics) => {
+      g.clear();
+      for (const end of to) {
+        const dx = end.x - from.x;
+        const dy = end.y - from.y;
+        const len = Math.hypot(dx, dy) || 1;
+        // Stop short of the corner so the pier doesn't cover a house.
+        const stop = Math.max(0, len - 7);
+        const tx = from.x + (dx / len) * stop;
+        const ty = from.y + (dy / len) * stop;
+        g.moveTo(from.x, from.y);
+        g.lineTo(tx, ty);
+        g.stroke({ width: 4, color: 0x2a1c12 });
+        g.moveTo(from.x, from.y);
+        g.lineTo(tx, ty);
+        g.stroke({ width: 2, color: 0x9a7448 });
+      }
+    },
+    [from, to],
+  );
+  return <pixiGraphics draw={draw} eventMode="none" />;
+}
+
+function PortPlaque({ specific }: { specific: boolean }) {
+  const draw = useCallback(
+    (g: PixiGraphics) => {
+      const w = specific ? 30 : 22;
+      g.clear();
+      g.rect(-w / 2 - 1, 8, w + 2, 14);
+      g.fill({ color: 0x2a1c12 });
+      g.rect(-w / 2, 9, w, 12);
+      g.fill({ color: PALETTE.parchment });
+      g.rect(-w / 2, 19, w, 2);
+      g.fill({ color: 0xc9b48a });
+    },
+    [specific],
+  );
+  return <pixiGraphics draw={draw} eventMode="none" />;
+}
+
+/** A ring on a free intersection where a piece can go. */
 function SurveyStakes({ color }: { color: string }) {
+  const frame = useAnimFrame();
+  const pulse = (frame % 12) < 6 ? 0 : 1;
   const draw = useCallback(
     (g: PixiGraphics) => {
       const mark = FACTION_HEX[color] ?? 0xe8e0d0;
       g.clear();
-      for (const x of [-4, 4]) {
-        g.rect(x, -6, 1, 5);
-        g.fill({ color: 0x3a2818 });
-        g.rect(x, -6, 1, 2);
-        g.fill({ color: mark });
-      }
-      g.moveTo(-4, -6);
-      g.lineTo(4, -6);
-      g.stroke({ width: 1, color: 0xf4e8c8, alpha: 0.5 });
+      g.circle(0, 0, 7 + pulse);
+      g.stroke({ width: 4, color: 0x1a1208, alpha: 0.85 });
+      g.circle(0, 0, 7 + pulse);
+      g.stroke({ width: 2, color: PALETTE.parchment });
+      g.circle(0, 0, 2.5);
+      g.fill({ color: mark });
     },
-    [color],
+    [color, pulse],
   );
-  return <pixiGraphics draw={draw} alpha={0.55} />;
+  return <pixiGraphics draw={draw} eventMode="none" />;
 }
 
 function RobberShade() {

@@ -4,13 +4,14 @@ import { extname, join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { createGame, reduce } from "../core/reduce.ts";
 import { projectEventsFor, projectStateFor } from "../core/view.ts";
-import { nextBotAction } from "../ai/bot.ts";
+import { nextBotAction, staleBotOffer } from "../ai/bot.ts";
 import type { ClientMsg, ServerMsg } from "../protocol.ts";
 import type { GameEvent, GameState, PlayerId } from "../core/types.ts";
 import { parseClientMsg } from "./validate.ts";
 
-const PROD = process.env.NODE_ENV === "production";
-const PORT = Number(process.env.PORT || (PROD ? 43123 : 43124));
+const PROD = process.env.NODE_ENV === "production" || process.argv.includes("--prod");
+// In dev, PORT belongs to Vite (the client); the room server sits beside it.
+const PORT = PROD ? Number(process.env.PORT || 43123) : Number(process.env.WS_PORT || 43124);
 const DIST = join(process.cwd(), "dist");
 const COLORS = ["#c44536", "#2b6cb0", "#d97706", "#e8e0d0"];
 const BOT_NAMES = ["Marinheiro", "Lenhadora", "Mineiro"];
@@ -74,17 +75,19 @@ function scheduleBots(room: Room): void {
   if (room.botTimer) clearTimeout(room.botTimer);
   if (!room.state || room.state.phase.type === "gameOver") return;
   const act = nextBotAction(room.state);
-  if (!act) return;
+  // A bot offer that only humans still answer is withdrawn after a while.
+  const stale = act ? null : staleBotOffer(room.state);
+  if (!act && !stale) return;
   room.botTimer = setTimeout(() => {
     if (!room.state) return;
-    const next = nextBotAction(room.state);
+    const next = act ? nextBotAction(room.state) : staleBotOffer(room.state);
     if (!next) return;
     const r = reduce(room.state, next);
     if (!r.ok) return;
     room.state = r.state;
     broadcastViews(room, r.events);
     scheduleBots(room);
-  }, 520);
+  }, act ? 520 : 15000);
 }
 
 function hasHumanSocket(room: Room): boolean {

@@ -91,7 +91,7 @@ export function legalActions(state: GameState, playerId: PlayerId): Action[] {
 
   if (phase.type === "roll" && isCurrent) {
     actions.push({ type: "ROLL", playerId });
-    addDevPlays(state, player, actions, true);
+    addDevPlays(state, player, actions);
     return actions;
   }
 
@@ -133,7 +133,7 @@ export function legalActions(state: GameState, playerId: PlayerId): Action[] {
         }
       }
     }
-    addDevPlays(state, player, actions, false);
+    addDevPlays(state, player, actions);
     actions.push({ type: "END_TURN", playerId });
   }
 
@@ -142,13 +142,18 @@ export function legalActions(state: GameState, playerId: PlayerId): Action[] {
       const response = offer.responses[playerId];
       if (offer.from === playerId) {
         actions.push({ type: "CANCEL_TRADE", playerId, offerId: offer.id });
+        if (!hasAtLeast(player.resources, offer.give)) continue;
+        for (const [otherId, answer] of Object.entries(offer.responses)) {
+          const other = state.players.find((p) => p.id === otherId);
+          if (answer === "accepted" && other && hasAtLeast(other.resources, offer.want)) {
+            actions.push({ type: "CONFIRM_TRADE", playerId, offerId: offer.id, with: otherId });
+          }
+        }
       } else if (response === "pending") {
         if (hasAtLeast(player.resources, offer.want)) {
           actions.push({ type: "ACCEPT_TRADE", playerId, offerId: offer.id });
         }
         actions.push({ type: "REJECT_TRADE", playerId, offerId: offer.id });
-      } else if (response === "accepted" && hasAtLeast(player.resources, offer.want)) {
-        actions.push({ type: "ACCEPT_TRADE", playerId, offerId: offer.id });
       }
     }
   }
@@ -156,13 +161,12 @@ export function legalActions(state: GameState, playerId: PlayerId): Action[] {
   return actions;
 }
 
-function addDevPlays(state: GameState, player: Player, actions: Action[], knightOnly: boolean): void {
+function addDevPlays(state: GameState, player: Player, actions: Action[]): void {
   if (state.playedDevThisTurn) return;
   const pid = player.id;
   if (player.devCards.some((c) => c.playable && c.type === "knight")) {
     actions.push({ type: "PLAY_KNIGHT", playerId: pid });
   }
-  if (knightOnly) return;
   if (player.devCards.some((c) => c.playable && c.type === "roadBuilding") && player.roadsLeft > 0) {
     actions.push({ type: "PLAY_ROAD_BUILDING", playerId: pid });
   }

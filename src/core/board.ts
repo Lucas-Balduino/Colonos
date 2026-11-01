@@ -89,8 +89,11 @@ function isLand(q: number, r: number): boolean {
   return cubeDistance({ q, r }) <= 2;
 }
 
+type PortSpec = { ratio: 2 | 3; resource: Resource | "any" };
+
 function buildGraph(
   layout: Array<{ q: number; r: number; terrain: Terrain; number: number | null }>,
+  portSpecs: PortSpec[] = PORT_SEQUENCE,
 ): Board {
   const hexes: Record<HexId, HexTile> = {};
   const vertices: Record<VertexId, Vertex> = {};
@@ -160,7 +163,7 @@ function buildGraph(
   }
 
   const desert = Object.values(hexes).find((h) => h.terrain === "desert");
-  const ports = placePorts(edges);
+  const ports = placePorts(edges, portSpecs);
 
   return {
     hexes,
@@ -171,7 +174,7 @@ function buildGraph(
   };
 }
 
-function placePorts(edges: Record<EdgeId, Edge>): Port[] {
+function placePorts(edges: Record<EdgeId, Edge>, specs: PortSpec[]): Port[] {
   const coastal = Object.values(edges).filter((e) => e.hexes.length === 1);
   if (coastal.length === 0) return [];
 
@@ -205,10 +208,13 @@ function placePorts(edges: Record<EdgeId, Edge>): Port[] {
     current = candidates[0]!;
   }
 
+  // Spread the ports evenly around the whole coast. With 30 coastal edges the
+  // gaps are 3 or 4 edges, so two ports never share an intersection.
   const ports: Port[] = [];
-  for (let i = 0; i < 9; i++) {
-    const edge = ordered[i * 2];
-    const spec = PORT_SEQUENCE[i];
+  const step = ordered.length / specs.length;
+  for (let i = 0; i < specs.length; i++) {
+    const edge = ordered[Math.floor(i * step)];
+    const spec = specs[i];
     if (!edge || !spec) continue;
     ports.push({
       edgeId: edge.id,
@@ -235,23 +241,38 @@ export function createBeginnerBoard(): Board {
 }
 
 export function createRandomBoard(rng: number): { board: Board; rng: number } {
-  const shuffled = shuffle(LAND_TERRAINS, rng);
-  let r = shuffled.rng;
-  const terrains = shuffled.items;
   const coords = spiralOuterFirst(2);
-  const layout: Array<{ q: number; r: number; terrain: Terrain; number: number | null }> = [];
-  let ni = 0;
-  for (let i = 0; i < coords.length; i++) {
-    const c = coords[i]!;
-    const terrain = terrains[i]!;
-    let number: number | null = null;
-    if (terrain !== "desert") {
-      number = SPIRAL_NUMBERS[ni] ?? 8;
-      ni += 1;
+  let r = rng;
+  // Shuffle terrains and numbers, and retry until no two 6/8 tokens touch.
+  // Hot numbers side by side make one corner of the island far too rich.
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const terrains = shuffle(LAND_TERRAINS, r);
+    const numbers = shuffle(SPIRAL_NUMBERS, terrains.rng);
+    r = numbers.rng;
+    const layout: Array<{ q: number; r: number; terrain: Terrain; number: number | null }> = [];
+    let ni = 0;
+    for (let i = 0; i < coords.length; i++) {
+      const c = coords[i]!;
+      const terrain = terrains.items[i]!;
+      const number = terrain === "desert" ? null : (numbers.items[ni++] ?? 8);
+      layout.push({ q: c.q, r: c.r, terrain, number });
     }
-    layout.push({ q: c.q, r: c.r, terrain, number });
+    if (attempt < 499 && hotNumbersTouch(layout)) continue;
+    const ports = shuffle(PORT_SEQUENCE, r);
+    return { board: buildGraph(layout, ports.items), rng: ports.rng };
   }
-  return { board: buildGraph(layout), rng: r };
+  throw new Error("unreachable");
+}
+
+function hotNumbersTouch(layout: Array<{ q: number; r: number; number: number | null }>): boolean {
+  const hot = new Set(layout.filter((c) => c.number === 6 || c.number === 8).map((c) => hexId(c.q, c.r)));
+  for (const id of hot) {
+    const [q, rr] = id.split(",").map(Number) as [number, number];
+    for (const d of HEX_DIRS) {
+      if (hot.has(hexId(q + d.q, rr + d.r))) return true;
+    }
+  }
+  return false;
 }
 
 export function hexesOfVertex(board: Board, vertexId: VertexId): HexTile[] {

@@ -64,7 +64,10 @@ describe("troca entre jogadores", () => {
     const marked = must(opened, { type: "ACCEPT_TRADE", playerId: "p3", offerId: id });
     expect(marked.tradeOffers).toHaveLength(1);
     expect(marked.tradeOffers[0]!.responses.p3).toBe("accepted");
-    const closed = must(marked, { type: "ACCEPT_TRADE", playerId: "p3", offerId: id });
+    expect(reduce(marked, { type: "ACCEPT_TRADE", playerId: "p3", offerId: id }).ok).toBe(false);
+    expect(reduce(marked, { type: "CONFIRM_TRADE", playerId: "p3", offerId: id, with: "p3" }).ok).toBe(false);
+    expect(reduce(marked, { type: "CONFIRM_TRADE", playerId: "p1", offerId: id, with: "p2" }).ok).toBe(false);
+    const closed = must(marked, { type: "CONFIRM_TRADE", playerId: "p1", offerId: id, with: "p3" });
     expect(closed.tradeOffers).toHaveLength(0);
     expect(closed.log.some((line) => line.text === "Você trocou 2 madeira por 1 trigo com Lenhadora.")).toBe(true);
     const you = closed.players.find((player) => player.id === "p1");

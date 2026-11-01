@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { botDelayMs, botTradeDelayMs, nextBotAction, pendingBotTrades, whoseTurn } from "../ai/bot.ts";
+import { botDelayMs, botTradeDelayMs, nextBotAction, pendingBotTrades, staleBotOffer, whoseTurn } from "../ai/bot.ts";
 import { createGame, reduce } from "../core/reduce.ts";
 import { projectStateFor } from "../core/view.ts";
 import type { Action, CreateGameOptions, GameEvent, GameState, PlayerId, PublicView } from "../core/types.ts";
@@ -49,7 +49,7 @@ export function useLocalGame(opts: CreateGameOptions, viewerId: PlayerId, initia
       const offerId = key.slice(0, key.indexOf(":"));
       if (!state.tradeOffers.some((offer) => offer.id === offerId)) tradeArmed.current.delete(key);
     }
-    for (const act of pendingBotTrades(state)) {
+    for (const [order, act] of pendingBotTrades(state).entries()) {
       if (act.type !== "ACCEPT_TRADE" && act.type !== "REJECT_TRADE") continue;
       const offer = state.tradeOffers.find((item) => item.id === act.offerId);
       const status = offer?.responses[act.playerId] ?? "pending";
@@ -66,14 +66,26 @@ export function useLocalGame(opts: CreateGameOptions, viewerId: PlayerId, initia
         if (!fresh) return;
         const result = reduce(current, fresh);
         if (result.ok) publish(result.state, result.events);
-      }, botTradeDelayMs());
+      }, botTradeDelayMs(order));
       tradeTimers.current.push(timer);
     }
 
     const actor = state.players.find((player) => player.id === whoseTurn(state));
     if (!actor?.isBot) return;
     const act = nextBotAction(state);
-    if (!act || act.type === "ACCEPT_TRADE" || act.type === "REJECT_TRADE") return;
+    if (act && (act.type === "ACCEPT_TRADE" || act.type === "REJECT_TRADE")) return;
+    if (!act) {
+      // The bot's offer waits on people. Give them time, then withdraw it.
+      const stale = staleBotOffer(state);
+      if (!stale) return;
+      const timer = window.setTimeout(() => {
+        const again = staleBotOffer(stateRef.current);
+        if (!again || nextBotAction(stateRef.current)) return;
+        const result = reduce(stateRef.current, again);
+        if (result.ok) publish(result.state, result.events);
+      }, 15000);
+      return () => window.clearTimeout(timer);
+    }
     const setupPiece = state.phase.type === "setupSettlement" || state.phase.type === "setupRoad";
     const remaining = fxRemainingMs();
     const delay = setupPiece ? 900 : remaining > 0 ? Math.min(900, remaining) : Math.min(900, botDelayMs());

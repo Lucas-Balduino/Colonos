@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { BoardView } from "./BoardView.tsx";
 import type { BuildMode } from "./copy.ts";
 import { GameOver } from "./GameOver.tsx";
-import { BuildPanel, Hud, ResourceStrip } from "./Hud.tsx";
+import { BuildPanel, Hud, OfferPanel, ResourceStrip } from "./Hud.tsx";
 import { projectStateFor } from "../core/view.ts";
 import { whoseTurn } from "../ai/bot.ts";
 import { emptyResources } from "../core/resources.ts";
@@ -121,7 +121,7 @@ export function TableLayout({
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-[#0a1c26] md:flex-row">
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 min-w-0 flex-1">
         <BoardView
           view={view}
           onAction={dispatch}
@@ -137,7 +137,7 @@ export function TableLayout({
         <Sheet open={sheet} onOpenChange={setSheet}>
           <SheetContent
             side="bottom"
-            className="max-h-[78vh] overflow-y-auto border-[#8a6410] bg-[#3d2a1f] p-0"
+            className="max-h-[78vh] overflow-y-auto border-[#8a6410] bg-[#3d2a1f] p-0 pt-8"
             showCloseButton
           >
             <SheetHeader className="sr-only">
@@ -155,6 +155,11 @@ export function TableLayout({
           </SheetContent>
         </Sheet>
       </div>
+      {view.tradeOffers.length > 0 && !sheet ? (
+        <div className="shrink-0 border-t-2 border-[#8a6410] bg-[#2a1c16] p-2 md:hidden">
+          <OfferPanel view={view} youId={you?.id ?? null} onAction={dispatch} />
+        </div>
+      ) : null}
       <div className="flex h-16 shrink-0 items-center gap-1 border-t-2 border-[#8a6410] bg-[#1a1520] px-1 md:hidden">
         <ResourceStrip resources={resources} batch={events} viewerId={you?.id ?? null} />
         {primary ? (

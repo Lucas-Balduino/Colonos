@@ -26,6 +26,7 @@ import {
   robberVictims,
 } from "./rules.ts";
 import { refreshAwards } from "./scoring.ts";
+import { actionShapeError, normalizeAction } from "./validate.ts";
 import {
   RESOURCES,
   type Action,
@@ -312,6 +313,7 @@ function nextTurn(state: GameState): void {
   state.dice = null;
   state.playedDevThisTurn = false;
   state.tradeOffers = [];
+  state.offersThisTurn = 0;
   for (const card of currentPlayer(state).devCards) card.playable = true;
 }
 
@@ -343,7 +345,7 @@ function apply(state: GameState, action: Action): void {
       if (state.phase.type === "freeRoads") {
         placeRoad(state, p, action.edgeId, true);
         state.phase.remaining -= 1;
-        if (state.phase.remaining <= 0) state.phase = { type: "main" };
+        if (state.phase.remaining <= 0) state.phase = { type: state.phase.after };
         log(state, `${p.name} construiu uma estrada grátis.`, p.id);
         return;
       }
@@ -431,8 +433,12 @@ function apply(state: GameState, action: Action): void {
       if (countResources(action.give) === 0 || countResources(action.want) === 0) {
         throw new RuleError("empty-trade", "A oferta precisa dar e pedir algo.");
       }
+      if (RESOURCES.some((r) => action.give[r] > 0 && action.want[r] > 0)) {
+        throw new RuleError("same-resource", "Não dá para dar e pedir o mesmo recurso.");
+      }
       if (!hasAtLeast(p.resources, action.give)) throw new RuleError("cannot-afford", "Você não tem o que oferece.");
       const id = `t${state.offerSeq++}`;
+      state.offersThisTurn = (state.offersThisTurn ?? 0) + 1;
       state.tradeOffers.push({
         id,
         from: p.id,
@@ -448,19 +454,29 @@ function apply(state: GameState, action: Action): void {
       const offer = state.tradeOffers.find((o) => o.id === action.offerId);
       if (!offer) throw new RuleError("no-offer", "Oferta inexistente.");
       if (offer.from === action.playerId) throw new RuleError("self-trade", "Não aceite a própria oferta.");
-      const response = offer.responses[action.playerId];
-      if (response === "rejected") throw new RuleError("already-answered", "Essa troca já foi recusada.");
-      if (response !== "pending" && response !== "accepted") {
+      if (offer.responses[action.playerId] !== "pending") {
         throw new RuleError("already-answered", "Essa resposta já foi dada.");
       }
       const other = playerById(state, action.playerId);
+      if (!hasAtLeast(other.resources, offer.want)) {
+        throw new RuleError("cannot-afford", "Você não tem o que a oferta pede.");
+      }
+      offer.responses[action.playerId] = "accepted";
+      log(state, `${other.name} topou a troca.`, other.id);
+      return;
+    }
+    case "CONFIRM_TRADE": {
+      if (state.phase.type !== "main") throw new RuleError("phase", "Trocas só no turno principal.");
+      const offer = state.tradeOffers.find((o) => o.id === action.offerId);
+      if (!offer) throw new RuleError("no-offer", "Oferta inexistente.");
+      if (offer.from !== action.playerId) throw new RuleError("not-yours", "Só quem ofereceu fecha a troca.");
+      if (offer.responses[action.with] !== "accepted") {
+        throw new RuleError("not-accepted", "Esse jogador não aceitou a troca.");
+      }
+      const other = playerById(state, action.with);
       const owner = playerById(state, offer.from);
       if (!hasAtLeast(owner.resources, offer.give) || !hasAtLeast(other.resources, offer.want)) {
         throw new RuleError("cannot-afford", "Alguém já não tem os recursos da troca.");
-      }
-      if (response === "pending") {
-        offer.responses[action.playerId] = "accepted";
-        return;
       }
       subFrom(owner.resources, offer.give);
       addTo(other.resources, offer.give);
@@ -565,20 +581,24 @@ function apply(state: GameState, action: Action): void {
     }
     case "PLAY_ROAD_BUILDING": {
       const p = assertCurrent(state, action.playerId);
-      if (state.phase.type !== "main") throw new RuleError("phase", "Jogue a carta no turno principal.");
+      if (state.phase.type !== "main" && state.phase.type !== "roll") {
+        throw new RuleError("phase", "Jogue a carta durante o seu turno.");
+      }
       if (state.playedDevThisTurn) throw new RuleError("one-dev", "Só uma carta por turno.");
       consumeDev(p, action.type);
       state.playedDevThisTurn = true;
       emit({ type: "devPlayed", playerId: p.id, card: "roadBuilding" });
       const leftover = Math.min(2, p.roadsLeft);
       if (leftover === 0) throw new RuleError("pieces", "Sem estradas para a carta.");
-      state.phase = { type: "freeRoads", remaining: leftover };
+      state.phase = { type: "freeRoads", remaining: leftover, after: state.phase.type === "roll" ? "roll" : "main" };
       log(state, `${p.name} jogou Construção de Estradas.`, p.id);
       return;
     }
     case "PLAY_YEAR_OF_PLENTY": {
       const p = assertCurrent(state, action.playerId);
-      if (state.phase.type !== "main") throw new RuleError("phase", "Jogue a carta no turno principal.");
+      if (state.phase.type !== "main" && state.phase.type !== "roll") {
+        throw new RuleError("phase", "Jogue a carta durante o seu turno.");
+      }
       if (state.playedDevThisTurn) throw new RuleError("one-dev", "Só uma carta por turno.");
       consumeDev(p, action.type);
       state.playedDevThisTurn = true;
@@ -593,7 +613,9 @@ function apply(state: GameState, action: Action): void {
     }
     case "PLAY_MONOPOLY": {
       const p = assertCurrent(state, action.playerId);
-      if (state.phase.type !== "main") throw new RuleError("phase", "Jogue a carta no turno principal.");
+      if (state.phase.type !== "main" && state.phase.type !== "roll") {
+        throw new RuleError("phase", "Jogue a carta durante o seu turno.");
+      }
       if (state.playedDevThisTurn) throw new RuleError("one-dev", "Só uma carta por turno.");
       consumeDev(p, action.type);
       state.playedDevThisTurn = true;
@@ -629,16 +651,18 @@ function normalize(state: GameState): void {
     const has = Object.values(state.board.edges).some(
       (e) => !e.road && p.roadsLeft > 0 && roadTouchesNetwork(state, p, e.id),
     );
-    if (!has) state.phase = { type: "main" };
+    if (!has) state.phase = { type: state.phase.after };
   }
 }
 
 export function reduce(state: GameState, action: Action): ReduceResult {
+  const shapeError = actionShapeError(action);
+  if (shapeError) return { ok: false, error: { code: "bad-action", message: shapeError } };
   const events: GameEvent[] = [];
   pendingEvents = events;
   try {
     const next = structuredClone(state) as GameState;
-    apply(next, action);
+    apply(next, normalizeAction(action));
     normalize(next);
     pendingEvents = [];
     return { ok: true, state: next, events };
@@ -704,6 +728,7 @@ export function createGame(opts: CreateGameOptions): GameState {
     devDeck: deck.deck,
     tradeOffers: [],
     offerSeq: 0,
+    offersThisTurn: 0,
     longestRoadPlayerId: null,
     largestArmyPlayerId: null,
     turnNumber: 0,

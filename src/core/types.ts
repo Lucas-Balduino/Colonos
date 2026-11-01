@@ -93,7 +93,7 @@ export type Phase =
   | { type: "moveRobber"; after: "roll" | "main" }
   | { type: "steal"; after: "roll" | "main"; hexId: HexId }
   | { type: "main" }
-  | { type: "freeRoads"; remaining: number }
+  | { type: "freeRoads"; remaining: number; after: "roll" | "main" }
   | { type: "gameOver"; winner: PlayerId };
 
 export type TradeResponse = "pending" | "rejected" | "accepted";
@@ -121,6 +121,8 @@ export interface GameState {
   devDeck: DevCardType[];
   tradeOffers: TradeOffer[];
   offerSeq: number;
+  /** Offers made by the current player this turn (missing in old saves). */
+  offersThisTurn?: number;
   longestRoadPlayerId: PlayerId | null;
   largestArmyPlayerId: PlayerId | null;
   turnNumber: number;
@@ -152,6 +154,7 @@ export type Action =
   | { type: "ACCEPT_TRADE"; playerId: PlayerId; offerId: string }
   | { type: "REJECT_TRADE"; playerId: PlayerId; offerId: string }
   | { type: "CANCEL_TRADE"; playerId: PlayerId; offerId: string }
+  | { type: "CONFIRM_TRADE"; playerId: PlayerId; offerId: string; with: PlayerId }
   | { type: "BUILD_SETTLEMENT"; playerId: PlayerId; vertexId: VertexId }
   | { type: "BUILD_CITY"; playerId: PlayerId; vertexId: VertexId }
   | { type: "BUILD_ROAD"; playerId: PlayerId; edgeId: EdgeId }

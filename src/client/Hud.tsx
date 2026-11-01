@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog.tsx";
-import { ScrollArea } from "@/components/ui/scroll-area.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog.tsx";
 import { RESOURCES, RESOURCE_LABEL, countResources, emptyResources } from "../core/index.ts";
-import type { Action, PublicView, Resource, ResourceMap, TradeOffer } from "../core/types.ts";
+import type { Action, DevCardType, PublicPlayerView, PublicView, Resource, ResourceMap, TradeOffer } from "../core/types.ts";
 import { CARD_SPRITE, CHIP_SPRITE, diceSprite, settlementSprite } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import type { BuildMode } from "./copy.ts";
@@ -11,6 +10,11 @@ import type { EventBatch } from "./fx/batch.ts";
 import { useHeldResources } from "./fx/held.ts";
 import { HowToPlay } from "./HowToPlay.tsx";
 
+/**
+ * The table tray. A scrolling middle (players, hand, cards, build, log) and a
+ * fixed bottom with whatever needs an answer now (offers, discard, robbery)
+ * above the turn buttons. Nothing important ever scrolls out of view.
+ */
 export function Hud({
   view,
   onAction,
@@ -29,335 +33,311 @@ export function Hud({
   events?: EventBatch;
 }) {
   const you = view.players.find((p) => p.isYou);
-  const yourTurn = Boolean(you && you.id === view.currentPlayerId);
   const legal = view.legal;
   const [discard, setDiscard] = useState<ResourceMap>(emptyResources());
+  const [tradeOpen, setTradeOpen] = useState(false);
   const [plentyOpen, setPlentyOpen] = useState(false);
-  const [plentySlots, setPlentySlots] = useState<Array<Resource | null>>([null, null]);
   const [monopolyOpen, setMonopolyOpen] = useState(false);
   const shown = useHeldResources(you?.resources ?? emptyResources(), events, you?.id ?? null);
 
-  const discardCount = countResources(discard);
-  const discardNeed = useMemo(() => {
-    if (view.phase.type !== "discard" || !you?.resources) return 0;
-    const n = countResources(you.resources);
-    return n > 7 ? Math.floor(n / 2) : 0;
-  }, [view.phase, you]);
+  const discarding = view.phase.type === "discard" && view.phase.queue[0] === you?.id;
+  const discardNeed = discarding && you?.resources ? Math.floor(countResources(you.resources) / 2) : 0;
 
-  const tapDiscard = (r: Resource) => {
-    if (!you?.resources) return;
-    const next = { ...discard };
-    if (next[r] < you.resources[r]) next[r] += 1;
-    else next[r] = 0;
-    setDiscard(next);
-  };
+  useEffect(() => {
+    if (!discarding) setDiscard(emptyResources());
+  }, [discarding]);
 
   const act = (a: Action) => {
     sfx("click");
-    onAction(a);
+    return onAction(a);
   };
 
-  const current = view.players.find((p) => p.id === view.currentPlayerId);
-  const others = view.players.filter((p) => p.id !== view.currentPlayerId);
+  const tapCard = (r: Resource) => {
+    if (!discardNeed || !you?.resources) return;
+    const owned = you.resources[r];
+    setDiscard((prev) => {
+      const next = { ...prev };
+      const room = discardNeed - countResources(prev);
+      if (next[r] < owned && room > 0) next[r] += 1;
+      else next[r] = 0;
+      return next;
+    });
+  };
+
+  const canTrade = interactive && legal.some((a) => a.type === "END_TURN");
 
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col gap-3 overflow-y-auto p-3 md:w-[340px] md:shrink-0">
-      <div className="wood-panel p-3">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Ilha das Lanternas</p>
-            <h2 className="text-xl leading-none">Colonos</h2>
-          </div>
-          <div className="flex items-center gap-2">
-            <HowToPlay />
-            <DicePair faces={view.dice ?? [1, 1]} rolling={false} empty={!view.dice} />
-          </div>
-        </div>
-        {view.winnerId ? (
-          <p className="bg-primary text-primary-foreground mt-2 px-2 py-1 text-center text-xs">
-            Vitória: {view.players.find((p) => p.id === view.winnerId)?.name}
-          </p>
-        ) : (
-          <p className="text-muted-foreground mt-2 text-center text-[11px]">Turno {view.turnNumber || 0}</p>
-        )}
-      </div>
-
-      {view.phase.type === "main" && you ? (
-        <TradePanel view={view} youId={you.id} resources={you.resources} legal={legal} onAction={act} />
-      ) : null}
-
-      {current ? (
-        <PlayerPlaque
-          name={`${current.name}${current.isYou ? " (você)" : current.isBot ? " · bot" : ""}`}
-          color={current.color}
-          vp={current.publicVp}
-          cards={current.resourceCount}
-          settlements={current.settlementCount}
-          cities={current.cityCount}
-          knights={current.knightsPlayed}
-          active
-          winner={current.id === view.winnerId}
-          longest={view.longestRoadPlayerId === current.id}
-          army={view.largestArmyPlayerId === current.id}
-          featured
-        />
-      ) : null}
-
-      <div className="flex flex-col gap-1">
-        {others.map((p) => (
-          <PlayerPlaque
-            key={p.id}
-            name={`${p.name}${p.isYou ? " (você)" : p.isBot ? " · bot" : ""}`}
-            color={p.color}
-            vp={p.publicVp}
-            cards={p.resourceCount}
-            settlements={p.settlementCount}
-            cities={p.cityCount}
-            knights={p.knightsPlayed}
-            active={false}
-            winner={p.id === view.winnerId}
-            longest={view.longestRoadPlayerId === p.id}
-            army={view.largestArmyPlayerId === p.id}
+    <aside className="flex h-full min-h-0 w-full flex-col md:w-[352px] md:shrink-0">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3 pb-2">
+        <TableHeader view={view} />
+        <PlayerList view={view} />
+        {you?.resources ? (
+          <HandPanel hand={shown} ratios={you.bankRatios} discard={discardNeed ? discard : null} onTap={tapCard} />
+        ) : null}
+        {you?.devCards && you.devCards.length > 0 ? (
+          <DevCards
+            cards={you.devCards}
+            legal={legal}
+            interactive={interactive}
+            onPlay={(type) => {
+              if (type === "yearOfPlenty") setPlentyOpen(true);
+              else if (type === "monopoly") setMonopolyOpen(true);
+              else {
+                const a = legal.find((x) => x.type === (type === "knight" ? "PLAY_KNIGHT" : "PLAY_ROAD_BUILDING"));
+                if (a) act(a);
+              }
+            }}
           />
-        ))}
+        ) : null}
+        <BuildPanel legal={legal} buildMode={buildMode} onBuildMode={onBuildMode} onBuy={(a) => act(a)} />
+        <GameLog view={view} />
       </div>
 
-      <BuildPanel
-        legal={legal}
-        buildMode={buildMode}
-        onBuildMode={onBuildMode}
-        onBuy={(action) => act(action)}
-      />
-
-      {you?.resources ? (
-        <div className="wood-panel p-3">
-          <p className="mb-2 text-sm">Sua mão</p>
-          <div className="flex gap-1.5 overflow-x-auto pb-1">
-            {RESOURCES.map((r) => {
-              const n = shown[r];
-              return (
-                <button
-                  key={r}
-                  type="button"
-                  className={`resource-card ${n === 0 ? "opacity-55" : ""}`}
-                  onClick={() => {
-                    if (discardNeed) tapDiscard(r);
-                  }}
-                >
-                  <img src={CARD_SPRITE[r]} alt="" className="pixelated h-[4.6rem] w-[2.15rem] object-cover" />
-                  <span className="resource-seal">{n}</span>
-                  <span className="mt-1 text-[9px] leading-none uppercase">{RESOURCE_LABEL[r]}</span>
-                  {you.bankRatios ? <span className="text-[9px] text-[#d4a017]">{you.bankRatios[r]}:1</span> : null}
-                  {discardNeed ? <span className="text-[9px] text-[#8a6410]">-{discard[r]}</span> : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {you?.devCards && you.devCards.length > 0 ? (
-        <div className="flex flex-wrap gap-1">
-          {you.devCards.map((c, i) => (
-            <span
-              key={`${c.type}-${i}`}
-              className={`pixel-btn inline-flex items-center gap-1 px-2 py-1 text-[11px] ${c.playable ? "bg-primary text-primary-foreground" : "bg-secondary"}`}
-            >
-              <img src={CARD_SPRITE[c.type]} alt="" className="pixelated h-6 w-4" />
-              {devLabel(c.type)}
-              {!c.playable ? " (nova)" : ""}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      {interactive ? (
-        <div className="flex flex-wrap gap-2">
-          {legal.some((a) => a.type === "ROLL") ? (
-            <Button className="h-11 flex-1" onClick={() => act({ type: "ROLL", playerId: you!.id })}>
-              Rolar dados
-            </Button>
-          ) : null}
-          {legal.some((a) => a.type === "BUY_DEV") ? (
-            <Button variant="secondary" onClick={() => act({ type: "BUY_DEV", playerId: you!.id })}>
-              Comprar carta
-            </Button>
-          ) : null}
-          {legal.some((a) => a.type === "PLAY_KNIGHT") ? (
-            <Button variant="outline" onClick={() => act({ type: "PLAY_KNIGHT", playerId: you!.id })}>
-              Cavaleiro
-            </Button>
-          ) : null}
-          {legal.some((a) => a.type === "PLAY_ROAD_BUILDING") ? (
-            <Button variant="outline" onClick={() => act({ type: "PLAY_ROAD_BUILDING", playerId: you!.id })}>
-              2 estradas
-            </Button>
-          ) : null}
-          {you?.devCards?.some((c) => c.type === "yearOfPlenty") ? (
-            <Button
-              variant="outline"
-              disabled={!legal.some((a) => a.type === "PLAY_YEAR_OF_PLENTY")}
-              onClick={() => {
-                setPlentySlots([null, null]);
-                setPlentyOpen(true);
-              }}
-            >
-              Jogar Fartura
-            </Button>
-          ) : null}
-          {you?.devCards?.some((c) => c.type === "monopoly") ? (
-            <Button
-              variant="outline"
-              disabled={!legal.some((a) => a.type === "PLAY_MONOPOLY")}
-              onClick={() => setMonopolyOpen(true)}
-            >
-              Jogar Monopólio
-            </Button>
-          ) : null}
-          {legal.some((a) => a.type === "END_TURN") ? (
-            <Button variant="secondary" className="flex-1" onClick={() => act({ type: "END_TURN", playerId: you!.id })}>
-              Encerrar turno
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {discardNeed > 0 && you ? (
-        <div className="wood-panel p-3 text-sm">
-          <p className="mb-2">Descarte {discardNeed} cartas ({discardCount} escolhidas).</p>
-          <Button
-            disabled={discardCount !== discardNeed}
-            onClick={() => {
+      <div className="flex shrink-0 flex-col gap-2 border-t-4 border-[#8a6410] bg-[#2a1c16] p-3">
+        <OfferPanel view={view} youId={you?.id ?? null} onAction={act} />
+        {discardNeed > 0 && you ? (
+          <DiscardPanel
+            need={discardNeed}
+            chosen={discard}
+            onClear={() => setDiscard(emptyResources())}
+            onConfirm={() => {
               act({ type: "DISCARD", playerId: you.id, resources: discard });
               setDiscard(emptyResources());
             }}
-          >
-            Confirmar descarte
-          </Button>
-        </div>
-      ) : null}
-
-      {pendingRobberHex && yourTurn && you ? (
-        <div className="flex flex-wrap gap-2">
-          {legal
-            .filter((a) => a.type === "MOVE_ROBBER" && a.hexId === pendingRobberHex && a.stealFrom)
-            .map((a) =>
-              a.type === "MOVE_ROBBER" && a.stealFrom ? (
-                <Button key={a.stealFrom} onClick={() => act(a)}>
-                  Roubar {view.players.find((p) => p.id === a.stealFrom)?.name} (
-                  {view.players.find((p) => p.id === a.stealFrom)?.resourceCount ?? 0} cartas)
-                </Button>
-              ) : null,
-            )}
-        </div>
-      ) : null}
-
-      {view.phase.type === "steal" && yourTurn && you ? (
-        <div className="flex flex-wrap gap-2">
-          {legal
-            .filter((a) => a.type === "STEAL")
-            .map((a) =>
-              a.type === "STEAL" ? (
-                <Button key={a.from} onClick={() => act(a)}>
-                  Roubar {view.players.find((p) => p.id === a.from)?.name}
-                </Button>
-              ) : null,
-            )}
-        </div>
-      ) : null}
-
-      <Dialog open={plentyOpen} onOpenChange={setPlentyOpen}>
-        <DialogContent className="border-[#8a6410] bg-[#3d2a1f] text-[#f4e8c8]">
-          <DialogHeader>
-            <DialogTitle>Ano da Fartura</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm">Escolha duas cartas do banco. Podem ser iguais.</p>
-          <div className="flex gap-2">
-            {plentySlots.map((slot, index) => (
-              <button
-                key={index}
-                type="button"
-                className="resource-card"
-                onClick={() => setPlentySlots((prev) => prev.map((item, i) => (i === index ? null : item)))}
-              >
-                {slot ? <img src={CARD_SPRITE[slot]} alt="" className="pixelated h-16 w-8 object-cover" /> : <span>?</span>}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {RESOURCES.map((r) => {
-              const reserved = plentySlots.filter((slot) => slot === r).length;
-              const disabled = view.bank[r] - reserved <= 0;
-              return (
-                <Button
-                  key={r}
-                  size="sm"
-                  variant="outline"
-                  disabled={disabled}
-                  onClick={() =>
-                    setPlentySlots((prev) => {
-                      const empty = prev.indexOf(null);
-                      if (empty < 0) return prev;
-                      const next = [...prev];
-                      next[empty] = r;
-                      return next;
-                    })
-                  }
-                >
-                  {RESOURCE_LABEL[r]}
-                </Button>
-              );
-            })}
-          </div>
-          <Button
-            disabled={!plentyAction(legal, plentySlots)}
-            onClick={() => {
-              const action = plentyAction(legal, plentySlots);
-              if (!action) return;
-              act(action);
-              setPlentyOpen(false);
-            }}
-          >
-            Pegar
-          </Button>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={monopolyOpen} onOpenChange={setMonopolyOpen}>
-        <DialogContent className="border-[#8a6410] bg-[#3d2a1f] text-[#f4e8c8]">
-          <DialogHeader>
-            <DialogTitle>Monopólio</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm">Escolha o recurso que todo mundo entrega.</p>
-          <div className="flex flex-wrap gap-2">
-            {RESOURCES.map((r) => (
-              <Button
-                key={r}
-                variant="outline"
-                onClick={() => {
-                  const action = legal.find((a) => a.type === "PLAY_MONOPOLY" && a.resource === r);
-                  if (!action) return;
-                  act(action);
-                  setMonopolyOpen(false);
-                }}
-              >
-                {RESOURCE_LABEL[r]}
-              </Button>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <div className="parchment-log min-h-24 flex-1 overflow-hidden">
-        <ScrollArea className="h-full">
-          <ul className="space-y-1 p-2 text-[11px] text-[#3d2a1f]">
-            {[...view.log].reverse().map((e, i) => (
-              <li key={`${e.text}-${i}`}>{e.text}</li>
-            ))}
-          </ul>
-        </ScrollArea>
+          />
+        ) : null}
+        <RobberyPanel view={view} pendingRobberHex={pendingRobberHex} onAction={act} />
+        <TurnButtons view={view} interactive={interactive} canTrade={canTrade} onTrade={() => setTradeOpen(true)} onAction={act} />
       </div>
+
+      {you ? (
+        <>
+          <TradeDialog open={tradeOpen} onOpenChange={setTradeOpen} view={view} you={you} onAction={act} />
+          <PlentyDialog open={plentyOpen} onOpenChange={setPlentyOpen} view={view} onAction={act} />
+          <MonopolyDialog open={monopolyOpen} onOpenChange={setMonopolyOpen} legal={legal} onAction={act} />
+        </>
+      ) : null}
     </aside>
+  );
+}
+
+// ---------- header and players ----------
+
+function TableHeader({ view }: { view: PublicView }) {
+  return (
+    <div className="wood-panel flex items-center justify-between gap-2 px-3 py-2">
+      <div>
+        <p className="text-gold text-[10px] tracking-[0.24em] uppercase">Ilha das Lanternas</p>
+        <p className="text-muted-foreground text-[11px]">{view.turnNumber > 0 ? `Rodada ${view.turnNumber}` : "Fundação"}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <DicePair dice={view.dice} />
+        <HowToPlay />
+      </div>
+    </div>
+  );
+}
+
+function DicePair({ dice }: { dice: [number, number] | null }) {
+  if (!dice) return <span className="text-muted-foreground text-[11px]">sem dados</span>;
+  const total = dice[0] + dice[1];
+  return (
+    <div className="flex items-center gap-1" aria-label={`Dados: ${total}`}>
+      <img src={diceSprite(dice[0])} alt="" className="pixelated size-9" />
+      <img src={diceSprite(dice[1])} alt="" className="pixelated size-9" />
+      <span className={`w-6 text-center text-lg leading-none ${total === 7 ? "text-[#e05a4a]" : "text-gold"}`}>{total}</span>
+    </div>
+  );
+}
+
+function PlayerList({ view }: { view: PublicView }) {
+  return (
+    <div className="flex flex-col gap-1">
+      {view.players.map((p) => (
+        <PlayerRow
+          key={p.id}
+          player={p}
+          current={p.id === view.currentPlayerId && view.phase.type !== "gameOver"}
+          winner={p.id === view.winnerId}
+          longest={view.longestRoadPlayerId === p.id}
+          army={view.largestArmyPlayerId === p.id}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PlayerRow({
+  player,
+  current,
+  winner,
+  longest,
+  army,
+}: {
+  player: PublicPlayerView;
+  current: boolean;
+  winner: boolean;
+  longest: boolean;
+  army: boolean;
+}) {
+  const nameColor = player.color === "#e8e0d0" ? "#f4e8c8" : player.color;
+  return (
+    <div
+      className={`wood-panel flex items-center gap-2 px-2 py-1.5 ${current ? "" : "opacity-80"}`}
+      style={{ borderColor: current || winner ? "#d4a017" : player.color }}
+    >
+      <span className="grid size-8 shrink-0 place-items-center" style={{ background: `${player.color}33` }}>
+        <img src={settlementSprite(player.color)} alt="" className="pixelated size-7" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="flex items-center gap-1.5 text-sm leading-tight">
+          <span className="truncate font-semibold" style={{ color: nameColor }}>
+            {player.isYou ? "Você" : player.name}
+          </span>
+          {player.isBot ? <span className="text-muted-foreground text-[10px]">bot</span> : null}
+          {current ? <span className="gold-ribbon px-1 text-[9px] leading-tight">VEZ</span> : null}
+        </p>
+        <p className="text-muted-foreground text-[11px] leading-tight">
+          {player.resourceCount} {player.resourceCount === 1 ? "carta" : "cartas"} · {player.devCount} desenv. ·{" "}
+          {player.knightsPlayed} cav.
+        </p>
+        {longest || army ? (
+          <p className="text-[10px] leading-tight text-[#e0b33a]">
+            {[longest ? "Maior estrada +2" : null, army ? "Maior exército +2" : null].filter(Boolean).join(" · ")}
+          </p>
+        ) : null}
+      </div>
+      <div className="shrink-0 text-right">
+        <p className="text-gold text-xl leading-none">{player.publicVp}</p>
+        <p className="text-muted-foreground text-[9px] uppercase">pontos</p>
+      </div>
+    </div>
+  );
+}
+
+// ---------- hand and cards ----------
+
+function HandPanel({
+  hand,
+  ratios,
+  discard,
+  onTap,
+}: {
+  hand: ResourceMap;
+  ratios?: Record<Resource, 2 | 3 | 4>;
+  discard: ResourceMap | null;
+  onTap: (r: Resource) => void;
+}) {
+  const total = countResources(hand);
+  return (
+    <div className="wood-panel p-2">
+      <p className="mb-1.5 flex justify-between text-xs">
+        <span>Sua mão</span>
+        <span className={total > 7 ? "text-[#e05a4a]" : "text-muted-foreground"}>
+          {total} {total === 1 ? "carta" : "cartas"}
+          {total > 7 ? " · risco no 7" : ""}
+        </span>
+      </p>
+      {ratios && RESOURCES.some((r) => ratios[r] === 3) ? (
+        <p className="mb-1 text-[10px] text-[#9ad1e5]">Porto 3:1: troque 3 cartas iguais por 1 no banco.</p>
+      ) : null}
+      <div className="grid grid-cols-5 gap-1">
+        {RESOURCES.map((r) => {
+          const n = hand[r];
+          const picked = discard?.[r] ?? 0;
+          const port = ratios && ratios[r] === 2 ? 2 : null;
+          return (
+            <button
+              key={r}
+              type="button"
+              disabled={!discard}
+              onClick={() => onTap(r)}
+              className={`resource-card min-w-0 !px-0.5 ${n === 0 ? "opacity-45" : ""} ${picked ? "resource-card-on" : ""} ${discard ? "cursor-pointer" : "cursor-default"}`}
+              aria-label={`${n} ${RESOURCE_LABEL[r]}`}
+            >
+              <img src={CARD_SPRITE[r]} alt="" className="pixelated h-12 w-auto" />
+              <span className="resource-seal !top-0.5 !bottom-auto">{n}</span>
+              <span className="mt-0.5 text-[9px] leading-none uppercase">{RESOURCE_LABEL[r]}</span>
+              {port ? <span className="mt-0.5 bg-[#16344a] px-1 text-[9px] text-[#9ad1e5]">porto {port}:1</span> : null}
+              {picked ? <span className="absolute inset-x-0 top-6 text-center text-sm font-bold text-[#c44536]">-{picked}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const DEV_INFO: Record<DevCardType, { name: string; hint: string }> = {
+  knight: { name: "Cavaleiro", hint: "Move o ladrão e rouba uma carta." },
+  victory: { name: "Ponto de vitória", hint: "Vale 1 ponto. Fica oculto." },
+  roadBuilding: { name: "Estradas", hint: "Duas estradas grátis." },
+  yearOfPlenty: { name: "Fartura", hint: "Duas cartas do banco." },
+  monopoly: { name: "Monopólio", hint: "Todos entregam um recurso." },
+};
+
+const DEV_ACTION: Partial<Record<DevCardType, Action["type"]>> = {
+  knight: "PLAY_KNIGHT",
+  roadBuilding: "PLAY_ROAD_BUILDING",
+  yearOfPlenty: "PLAY_YEAR_OF_PLENTY",
+  monopoly: "PLAY_MONOPOLY",
+};
+
+function DevCards({
+  cards,
+  legal,
+  interactive,
+  onPlay,
+}: {
+  cards: Array<{ type: DevCardType; playable: boolean }>;
+  legal: Action[];
+  interactive: boolean;
+  onPlay: (type: DevCardType) => void;
+}) {
+  const groups = new Map<DevCardType, { total: number; ready: number }>();
+  for (const c of cards) {
+    const g = groups.get(c.type) ?? { total: 0, ready: 0 };
+    g.total += 1;
+    if (c.playable) g.ready += 1;
+    groups.set(c.type, g);
+  }
+  return (
+    <div className="wood-panel p-2">
+      <p className="mb-1.5 text-xs">Cartas de desenvolvimento</p>
+      <div className="flex flex-col gap-1">
+        {[...groups.entries()].map(([type, g]) => {
+          const actionType = DEV_ACTION[type];
+          const can = interactive && actionType ? legal.some((a) => a.type === actionType) : false;
+          const note =
+            type === "victory"
+              ? "conta no fim"
+              : g.ready === 0
+                ? "nova: jogue no próximo turno"
+                : can
+                  ? "toque para jogar"
+                  : "1 carta por turno, na sua vez";
+          return (
+            <button
+              key={type}
+              type="button"
+              disabled={!can}
+              onClick={() => onPlay(type)}
+              className={`pixel-btn flex items-center gap-2 px-2 py-1 text-left ${can ? "bg-primary text-primary-foreground" : "bg-secondary"}`}
+              title={DEV_INFO[type].hint}
+            >
+              <img src={CARD_SPRITE[type]} alt="" className="pixelated h-8 w-auto" />
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs leading-tight">
+                  {DEV_INFO[type].name}
+                  {g.total > 1 ? ` ×${g.total}` : ""}
+                </span>
+                <span className={`block text-[10px] leading-tight ${can ? "" : "text-muted-foreground"}`}>{note}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -374,10 +354,11 @@ export function BuildPanel({
 }) {
   return (
     <div className="wood-panel p-2">
-      <p className="mb-1 text-[10px] tracking-[0.2em] uppercase text-[#d4a017]">Construir</p>
+      <p className="mb-1.5 text-xs">Construir</p>
       <div className="grid grid-cols-2 gap-1">
         <BuildChoice
           label="Estrada"
+          points="0 pt"
           parts={["wood", "brick"]}
           enabled={legal.some((a) => a.type === "BUILD_ROAD")}
           pressed={buildMode === "road"}
@@ -385,6 +366,7 @@ export function BuildPanel({
         />
         <BuildChoice
           label="Aldeia"
+          points="1 pt"
           parts={["wood", "brick", "sheep", "wheat"]}
           enabled={legal.some((a) => a.type === "BUILD_SETTLEMENT")}
           pressed={buildMode === "settlement"}
@@ -392,6 +374,7 @@ export function BuildPanel({
         />
         <BuildChoice
           label="Cidade"
+          points="2 pt"
           parts={["wheat", "wheat", "ore", "ore", "ore"]}
           enabled={legal.some((a) => a.type === "BUILD_CITY")}
           pressed={buildMode === "city"}
@@ -399,6 +382,7 @@ export function BuildPanel({
         />
         <BuildChoice
           label="Carta"
+          points="?"
           parts={["sheep", "wheat", "ore"]}
           enabled={legal.some((a) => a.type === "BUY_DEV")}
           pressed={false}
@@ -409,6 +393,44 @@ export function BuildPanel({
         />
       </div>
     </div>
+  );
+}
+
+function BuildChoice({
+  label,
+  points,
+  parts,
+  enabled,
+  pressed,
+  onClick,
+}: {
+  label: string;
+  points: string;
+  parts: Resource[];
+  enabled: boolean;
+  pressed: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={!enabled}
+      aria-pressed={pressed}
+      onClick={onClick}
+      className={`pixel-btn flex flex-col gap-0.5 px-1.5 py-1 text-left ${
+        pressed ? "bg-primary text-primary-foreground" : enabled ? "bg-[#4a5a2a]" : "bg-secondary opacity-55"
+      }`}
+    >
+      <span className="flex justify-between text-xs leading-tight">
+        <span>{label}</span>
+        <span className="text-[10px] opacity-75">{points}</span>
+      </span>
+      <span className="flex gap-0.5">
+        {parts.map((r, i) => (
+          <img key={`${r}-${i}`} src={CHIP_SPRITE[r]} alt={RESOURCE_LABEL[r]} className="pixelated size-4" />
+        ))}
+      </span>
+    </button>
   );
 }
 
@@ -427,291 +449,442 @@ export function ResourceStrip({
       {RESOURCES.map((r) => (
         <span key={r} className="grid w-7 place-items-center leading-none">
           <img src={CHIP_SPRITE[r]} alt={RESOURCE_LABEL[r]} className="pixelated size-5" />
-          <span className="text-[10px]">{shown[r]}</span>
+          <span className="text-[11px]">{shown[r]}</span>
         </span>
       ))}
     </div>
   );
 }
 
-function BuildChoice({
-  label,
-  parts,
-  enabled,
-  pressed,
-  onClick,
-}: {
-  label: string;
-  parts: Resource[];
-  enabled: boolean;
-  pressed: boolean;
-  onClick: () => void;
-}) {
+function GameLog({ view }: { view: PublicView }) {
+  const lines = [...view.log].reverse().slice(0, 40);
   return (
-    <button
-      type="button"
-      disabled={!enabled}
-      aria-pressed={pressed}
-      onClick={onClick}
-      className={`pixel-btn flex items-center gap-1 px-1.5 py-1 text-left text-[11px] ${
-        pressed ? "bg-primary text-primary-foreground" : "bg-secondary"
-      } ${enabled ? "" : "opacity-40"}`}
-    >
-      <span className="shrink-0">{label}</span>
-      <span className="flex gap-0.5">
-        {parts.map((r, i) => (
-          <img key={`${r}-${i}`} src={CHIP_SPRITE[r]} alt="" className="pixelated size-4" />
-        ))}
-      </span>
-    </button>
-  );
-}
-
-function PlayerPlaque({
-  name,
-  color,
-  vp,
-  cards,
-  settlements,
-  cities,
-  knights,
-  active,
-  winner,
-  longest,
-  army,
-  featured,
-}: {
-  name: string;
-  color: string;
-  vp: number;
-  cards: number;
-  settlements: number;
-  cities: number;
-  knights: number;
-  active: boolean;
-  winner: boolean;
-  longest: boolean;
-  army: boolean;
-  featured?: boolean;
-}) {
-  return (
-    <div
-      className={`wood-panel px-2 py-1.5 text-xs ${active ? "ring-2 ring-[#d4a017]" : "opacity-75"} ${winner ? "bg-[#8a6410]" : ""}`}
-      style={{ borderColor: color }}
-    >
-      <div className="flex items-center justify-between gap-1">
-        <span className="flex min-w-0 items-center gap-1.5 font-semibold" style={{ color }}>
-          <img src={settlementSprite(color)} alt="" className="pixelated h-5 w-5 shrink-0" />
-          <span className="truncate">{name}</span>
-        </span>
-        <span className="text-gold shrink-0">{vp} PV</span>
-      </div>
-      {featured ? (
-        <div className="text-muted-foreground mt-1 flex justify-between">
-          <span>{cards} cartas</span>
-          <span>
-            {settlements} aldeias · {cities} cidades · {knights} cav.
-          </span>
-        </div>
-      ) : (
-        <div className="text-muted-foreground mt-0.5 flex justify-between">
-          <span>{cards}c</span>
-          <span>
-            {settlements}A {cities}C {knights}K
-          </span>
-        </div>
-      )}
-      {longest ? <span className="text-[10px] text-[#d4a017]">Maior estrada</span> : null}
-      {army ? <span className="text-[10px] text-[#d4a017]"> Maior exército</span> : null}
+    <div className="parchment-log min-h-28 flex-1 overflow-hidden">
+      <ul className="h-full space-y-0.5 overflow-y-auto p-2 text-[11px] text-[#3d2a1f]">
+        {lines.map((e, i) => {
+          const color = view.players.find((p) => p.id === e.playerId)?.color;
+          return (
+            <li key={`${view.log.length - i}-${e.text}`} className={i === 0 ? "font-bold" : ""}>
+              {color ? <span className="mr-1 inline-block size-2" style={{ background: color }} /> : null}
+              {e.text}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
 
-function DicePair({
-  faces,
-  rolling,
-  empty,
-}: {
-  faces: [number, number];
-  rolling: boolean;
-  empty: boolean;
-}) {
-  if (empty) return <span className="text-muted-foreground text-xs">Dados</span>;
-  return (
-    <div className={`flex items-center gap-1 ${rolling ? "animate-pulse" : ""}`}>
-      <img src={diceSprite(faces[0])} alt="" className="pixelated size-10" />
-      <img src={diceSprite(faces[1])} alt="" className="pixelated size-10" />
-      <span className="text-gold text-sm">{faces[0] + faces[1]}</span>
-    </div>
-  );
-}
+// ---------- the bottom band ----------
 
-function plentyAction(legal: Action[], slots: Array<Resource | null>): Action | null {
-  const [a, b] = slots;
-  if (!a || !b) return null;
-  return (
-    legal.find(
-      (action) =>
-        action.type === "PLAY_YEAR_OF_PLENTY" &&
-        ((action.resources[0] === a && action.resources[1] === b) ||
-          (action.resources[0] === b && action.resources[1] === a)),
-    ) ?? null
-  );
-}
-
-function TradePanel({
+function TurnButtons({
   view,
-  youId,
-  resources,
-  legal,
+  interactive,
+  canTrade,
+  onTrade,
   onAction,
 }: {
   view: PublicView;
-  youId: string;
-  resources?: ResourceMap;
-  legal: Action[];
-  onAction: (action: Action) => void;
+  interactive: boolean;
+  canTrade: boolean;
+  onTrade: () => void;
+  onAction: (a: Action) => boolean | void;
 }) {
-  const [tab, setTab] = useState<"mesa" | "banco">("mesa");
-  const [give, setGive] = useState<ResourceMap>(emptyResources());
-  const [want, setWant] = useState<ResourceMap>(emptyResources());
-  const hand = resources ?? emptyResources();
-  const yourTurn = view.currentPlayerId === youId && view.phase.type === "main";
-  const emptySide = countResources(give) === 0 || countResources(want) === 0;
-  const lacksCards = RESOURCES.some((resource) => give[resource] > hand[resource]);
-  const you = view.players.find((player) => player.id === youId);
+  const roll = view.legal.find((a) => a.type === "ROLL");
+  const end = view.legal.find((a) => a.type === "END_TURN");
+  const current = view.players.find((p) => p.id === view.currentPlayerId);
+  if (view.phase.type === "gameOver") {
+    const winner = view.players.find((p) => p.id === view.winnerId);
+    return (
+      <p className="gold-ribbon px-2 py-2 text-center text-sm">{winner?.isYou ? "Você venceu!" : `${winner?.name} venceu.`}</p>
+    );
+  }
+  if (!interactive || (!roll && !end)) {
+    return (
+      <p className="text-muted-foreground py-1 text-center text-xs">
+        {current?.isYou ? "Siga a instrução no mapa." : `Vez de ${current?.name ?? "outro jogador"}…`}
+      </p>
+    );
+  }
+  return (
+    <div className="flex gap-2">
+      {end ? (
+        <Button variant="secondary" className="h-11 flex-1" disabled={!canTrade} onClick={onTrade}>
+          Trocar
+        </Button>
+      ) : null}
+      {roll ? (
+        <Button className="h-11 flex-[2] text-base" onClick={() => onAction(roll)}>
+          Rolar dados
+        </Button>
+      ) : null}
+      {end ? (
+        <Button className="h-11 flex-[2]" onClick={() => onAction(end)}>
+          Encerrar turno
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+export function OfferPanel({
+  view,
+  youId,
+  onAction,
+}: {
+  view: PublicView;
+  youId: string | null;
+  onAction: (a: Action) => boolean | void;
+}) {
+  const offer = useLingeringOffer(view.tradeOffers[0] ?? null);
+  if (!offer || !youId) return null;
+  const owner = view.players.find((p) => p.id === offer.from);
+  const mine = offer.from === youId;
+  const myAnswer = offer.responses[youId];
+  const canAccept = view.legal.some((a) => a.type === "ACCEPT_TRADE" && a.offerId === offer.id);
+  const live = view.tradeOffers.some((o) => o.id === offer.id);
 
   return (
-    <div id="trocar" className="wood-panel space-y-2 p-2">
-      <div className="flex items-center gap-1">
-        <p className="mr-auto text-[10px] tracking-[0.2em] text-[#d4a017] uppercase">Trocar</p>
-        <button type="button" className={tradeTabClass(tab === "mesa")} onClick={() => setTab("mesa")}>
-          Mesa
-        </button>
-        <button type="button" className={tradeTabClass(tab === "banco")} onClick={() => setTab("banco")}>
-          Banco
-        </button>
-      </div>
-      {tab === "mesa" ? (
-        <>
-          <TradeStepper label="Você dá" value={give} cap={hand} onChange={setGive} />
-          <TradeStepper label="Você quer" value={want} onChange={setWant} />
-          <Button
-            className="h-8 w-full text-xs"
-            disabled={!yourTurn || view.tradeOffers.length > 0 || emptySide || lacksCards}
-            onClick={() => onAction({ type: "OFFER_TRADE", playerId: youId, give, want })}
-          >
-            Oferecer à mesa
-          </Button>
-          <OfferBoard view={view} youId={youId} onAction={onAction} />
-        </>
-      ) : (
-        <div className="space-y-1">
-          {RESOURCES.map((resource) => (
-            <div key={resource} className="flex flex-wrap items-center gap-1">
-              <span className="w-16 text-[10px] uppercase">{RESOURCE_LABEL[resource]}</span>
-              <span className="text-[10px] text-[#d4a017]">{you?.bankRatios ? `${you.bankRatios[resource]}:1` : ""}</span>
-              {legal
-                .filter((action) => action.type === "TRADE_BANK" && action.give === resource)
-                .map((action) =>
-                  action.type === "TRADE_BANK" ? (
-                    <Button key={action.take} size="sm" className="h-6 px-1 text-[10px]" onClick={() => onAction(action)}>
-                      Por {RESOURCE_LABEL[action.take]}
+    <div className="parchment-log p-2 text-xs text-[#2a1c12]">
+      <p className="mb-1">
+        <b>{mine ? "Sua oferta" : `${owner?.name} oferece`}</b>
+      </p>
+      <OfferLine give={offer.give} want={offer.want} mine={mine} />
+      {mine ? (
+        <div className="mt-1.5 space-y-1">
+          {view.players
+            .filter((p) => p.id !== youId)
+            .map((p) => {
+              const r = offer.responses[p.id] ?? "pending";
+              const confirm = view.legal.find((a) => a.type === "CONFIRM_TRADE" && a.offerId === offer.id && a.with === p.id);
+              return (
+                <div key={p.id} className="flex items-center justify-between gap-2">
+                  <span>{p.name}</span>
+                  {confirm && live ? (
+                    <Button size="xs" onClick={() => onAction(confirm)}>
+                      Fechar com {p.name}
                     </Button>
-                  ) : null,
-                )}
-            </div>
-          ))}
+                  ) : (
+                    <span className={r === "rejected" ? "text-[#a03a2c]" : "text-[#6a5a40]"}>
+                      {r === "rejected" ? "recusou" : r === "accepted" ? "topou" : "pensando…"}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          {live ? (
+            <Button
+              size="xs"
+              variant="secondary"
+              className="w-full"
+              onClick={() => onAction({ type: "CANCEL_TRADE", playerId: youId, offerId: offer.id })}
+            >
+              Retirar oferta
+            </Button>
+          ) : (
+            <p className="text-center text-[#a03a2c]">Ninguém topou.</p>
+          )}
         </div>
+      ) : myAnswer === "pending" && live ? (
+        <div className="mt-1.5 flex gap-1">
+          <Button
+            size="xs"
+            className="flex-1"
+            disabled={!canAccept}
+            onClick={() => onAction({ type: "ACCEPT_TRADE", playerId: youId, offerId: offer.id })}
+          >
+            {canAccept ? "Topar" : "Faltam cartas"}
+          </Button>
+          <Button
+            size="xs"
+            variant="secondary"
+            className="flex-1"
+            onClick={() => onAction({ type: "REJECT_TRADE", playerId: youId, offerId: offer.id })}
+          >
+            Recusar
+          </Button>
+        </div>
+      ) : (
+        <p className="mt-1 text-[#6a5a40]">
+          {myAnswer === "accepted" ? `Você topou. ${owner?.name} decide se fecha.` : "Você recusou."}
+        </p>
       )}
     </div>
   );
 }
 
-function useShownOffer(offer: TradeOffer | null): TradeOffer | null {
-  const seen = useRef<TradeOffer | null>(null);
+function OfferLine({ give, want, mine }: { give: ResourceMap; want: ResourceMap; mine: boolean }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <ChipList map={give} />
+      <span className="text-[10px]">{mine ? "por" : "em troca de"}</span>
+      <ChipList map={want} />
+    </div>
+  );
+}
+
+function ChipList({ map }: { map: ResourceMap }) {
+  return (
+    <span className="flex flex-wrap items-center gap-0.5">
+      {RESOURCES.filter((r) => map[r] > 0).map((r) => (
+        <span key={r} className="flex items-center gap-0.5 bg-[#e8d9a8] px-1">
+          <b>{map[r]}</b>
+          <img src={CHIP_SPRITE[r]} alt={RESOURCE_LABEL[r]} className="pixelated size-4" />
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** Keeps an offer nobody took on screen briefly, so people see how it ended. */
+function useLingeringOffer(offer: TradeOffer | null): TradeOffer | null {
+  const last = useRef<TradeOffer | null>(null);
   const [linger, setLinger] = useState<TradeOffer | null>(null);
   useEffect(() => {
     if (offer) {
-      seen.current = offer;
+      last.current = offer;
+      setLinger(null);
       return;
     }
-    const prev = seen.current;
+    const prev = last.current;
+    last.current = null;
     if (!prev) return;
-    seen.current = null;
-    const pending = Object.entries(prev.responses).filter(([, response]) => response === "pending");
-    const rejected = Object.values(prev.responses).filter((response) => response === "rejected").length;
-    const accepted = Object.values(prev.responses).some((response) => response === "accepted");
-    if (accepted || rejected === 0 || pending.length !== 1) return;
-    const lastId = pending[0]?.[0];
-    if (!lastId) return;
-    setLinger({ ...prev, responses: { ...prev.responses, [lastId]: "rejected" } });
-    const timer = window.setTimeout(() => setLinger(null), 1800);
+    const nobody = Object.values(prev.responses).every((r) => r !== "accepted");
+    if (!nobody) return;
+    setLinger({ ...prev, responses: Object.fromEntries(Object.keys(prev.responses).map((k) => [k, "rejected"])) });
+    const timer = window.setTimeout(() => setLinger(null), 1600);
     return () => window.clearTimeout(timer);
   }, [offer]);
   return offer ?? linger;
 }
 
-function OfferBoard({
-  view,
-  youId,
-  onAction,
+function DiscardPanel({
+  need,
+  chosen,
+  onClear,
+  onConfirm,
 }: {
-  view: PublicView;
-  youId: string;
-  onAction: (action: Action) => void;
+  need: number;
+  chosen: ResourceMap;
+  onClear: () => void;
+  onConfirm: () => void;
 }) {
-  const offer = useShownOffer(view.tradeOffers[0] ?? null);
-  if (!offer) return null;
-  const offers = [offer];
+  const n = countResources(chosen);
   return (
-    <ul className="space-y-1">
-      {offers.map((offer) => {
-        const owner = view.players.find((player) => player.id === offer.from);
-        return (
-          <li key={offer.id} className="space-y-1">
-            <div>
-              {owner?.name} oferece {fmt(offer.give)} por {fmt(offer.want)}
-            </div>
-            {view.players
-              .filter((player) => player.id !== offer.from)
-              .map((player) => {
-                const response = offer.responses[player.id] ?? "pending";
-                return (
-                  <div key={player.id} data-trade-player={player.name}>
-                    {player.name}:{" "}
-                    {response === "accepted" ? (
-                      <Button
-                        size="sm"
-                        className="h-6 px-1 text-[10px]"
-                        onClick={() => onAction({ type: "ACCEPT_TRADE", playerId: player.id, offerId: offer.id })}
-                      >
-                        Fechar com {player.name}
-                      </Button>
-                    ) : response === "rejected" ? (
-                      "recusou"
-                    ) : player.id === youId ? (
-                      <Button
-                        size="sm"
-                        className="h-6 px-1 text-[10px]"
-                        onClick={() => onAction({ type: "ACCEPT_TRADE", playerId: youId, offerId: offer.id })}
-                      >
-                        Aceitar
-                      </Button>
-                    ) : (
-                      "aguardando"
-                    )}
-                  </div>
-                );
-              })}
-          </li>
-        );
-      })}
-    </ul>
+    <div className="parchment-log p-2 text-xs text-[#2a1c12]">
+      <p>
+        <b>Saiu 7.</b> Escolha {need} {need === 1 ? "carta" : "cartas"} para devolver: toque nas cartas da sua mão.
+      </p>
+      <div className="mt-1.5 flex items-center gap-1">
+        <ChipList map={chosen} />
+        <span className="ml-auto">
+          {n}/{need}
+        </span>
+      </div>
+      <div className="mt-1.5 flex gap-1">
+        <Button size="xs" variant="secondary" onClick={onClear} disabled={n === 0}>
+          Limpar
+        </Button>
+        <Button size="xs" className="flex-1" disabled={n !== need} onClick={onConfirm}>
+          Devolver {need}
+        </Button>
+      </div>
+    </div>
   );
 }
 
-function TradeStepper({
+function RobberyPanel({
+  view,
+  pendingRobberHex,
+  onAction,
+}: {
+  view: PublicView;
+  pendingRobberHex: string | null;
+  onAction: (a: Action) => boolean | void;
+}) {
+  const picks: Action[] =
+    view.phase.type === "steal"
+      ? view.legal.filter((a) => a.type === "STEAL")
+      : pendingRobberHex
+        ? view.legal.filter((a) => a.type === "MOVE_ROBBER" && a.hexId === pendingRobberHex && a.stealFrom)
+        : [];
+  if (picks.length === 0) return null;
+  return (
+    <div className="parchment-log p-2 text-xs text-[#2a1c12]">
+      <p className="mb-1">
+        <b>De quem roubar?</b> Uma carta ao acaso.
+      </p>
+      <div className="flex flex-wrap gap-1">
+        {picks.map((a) => {
+          const id = a.type === "STEAL" ? a.from : a.type === "MOVE_ROBBER" ? a.stealFrom : undefined;
+          const p = view.players.find((x) => x.id === id);
+          return (
+            <Button key={id} size="xs" onClick={() => onAction(a)} style={{ background: p?.color, color: "#1a1520" }}>
+              {p?.name} ({p?.resourceCount} cartas)
+            </Button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------- dialogs ----------
+
+function TradeDialog({
+  open,
+  onOpenChange,
+  view,
+  you,
+  onAction,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  view: PublicView;
+  you: PublicPlayerView;
+  onAction: (a: Action) => boolean | void;
+}) {
+  const [tab, setTab] = useState<"mesa" | "banco">("mesa");
+  const [give, setGive] = useState<ResourceMap>(emptyResources());
+  const [want, setWant] = useState<ResourceMap>(emptyResources());
+  const [bankGive, setBankGive] = useState<Resource | null>(null);
+  const [bankTake, setBankTake] = useState<Resource | null>(null);
+  const hand = you.resources ?? emptyResources();
+  const offerOpen = view.tradeOffers.length > 0;
+
+  useEffect(() => {
+    if (!open) return;
+    setGive(emptyResources());
+    setWant(emptyResources());
+    setBankGive(null);
+    setBankTake(null);
+  }, [open]);
+
+  const overlap = RESOURCES.some((r) => give[r] > 0 && want[r] > 0);
+  const offerProblem = offerOpen
+    ? "Já há uma oferta na mesa"
+    : countResources(give) === 0
+      ? "Escolha o que você dá"
+      : countResources(want) === 0
+        ? "Escolha o que você quer"
+        : overlap
+          ? "Não peça o mesmo recurso que dá"
+          : null;
+
+  const bankAction = view.legal.find((a) => a.type === "TRADE_BANK" && a.give === bankGive && a.take === bankTake);
+  const ratio = (r: Resource) => you.bankRatios?.[r] ?? 4;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm border-[#8a6410] bg-[#3d2a1f] text-[#f4e8c8]">
+        <DialogHeader>
+          <DialogTitle>Trocar</DialogTitle>
+          <DialogDescription className="text-muted-foreground text-xs">
+            Com os jogadores, vocês combinam o preço. Com o banco, a taxa é fixa: 4 por 1, ou menos com porto.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex gap-1">
+          <button type="button" className={tabClass(tab === "mesa")} onClick={() => setTab("mesa")}>
+            Jogadores
+          </button>
+          <button type="button" className={tabClass(tab === "banco")} onClick={() => setTab("banco")}>
+            Banco e portos
+          </button>
+        </div>
+        {tab === "mesa" ? (
+          <div className="space-y-3">
+            <Stepper label="Você dá" value={give} cap={hand} onChange={setGive} />
+            <Stepper label="Você quer" value={want} onChange={setWant} />
+            <Button
+              className="h-10 w-full"
+              disabled={Boolean(offerProblem)}
+              onClick={() => {
+                const ok = onAction({ type: "OFFER_TRADE", playerId: you.id, give, want });
+                if (ok !== false) onOpenChange(false);
+              }}
+            >
+              {offerProblem ?? "Oferecer à mesa"}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <p className="mb-1 text-[11px] uppercase">Você entrega</p>
+              <div className="grid grid-cols-5 gap-1">
+                {RESOURCES.map((r) => (
+                  <PickChip
+                    key={r}
+                    resource={r}
+                    caption={`${ratio(r)} por 1`}
+                    selected={bankGive === r}
+                    disabled={hand[r] < ratio(r)}
+                    onClick={() => setBankGive(r)}
+                  />
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-[11px] uppercase">Você recebe 1</p>
+              <div className="grid grid-cols-5 gap-1">
+                {RESOURCES.map((r) => (
+                  <PickChip
+                    key={r}
+                    resource={r}
+                    caption={`banco: ${view.bank[r]}`}
+                    selected={bankTake === r}
+                    disabled={r === bankGive || view.bank[r] === 0}
+                    onClick={() => setBankTake(r)}
+                  />
+                ))}
+              </div>
+            </div>
+            <Button
+              className="h-10 w-full"
+              disabled={!bankAction}
+              onClick={() => {
+                if (bankAction) onAction(bankAction);
+                setBankTake(null);
+              }}
+            >
+              {bankGive && bankTake
+                ? `Trocar ${ratio(bankGive)} ${RESOURCE_LABEL[bankGive].toLowerCase()} por 1 ${RESOURCE_LABEL[bankTake].toLowerCase()}`
+                : "Escolha o que entrega e o que recebe"}
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PickChip({
+  resource,
+  caption,
+  selected,
+  disabled,
+  onClick,
+}: {
+  resource: Resource;
+  caption: string;
+  selected: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`pixel-btn flex flex-col items-center py-1 ${selected ? "bg-primary text-primary-foreground" : "bg-secondary"} ${disabled ? "opacity-35" : ""}`}
+    >
+      <img src={CHIP_SPRITE[resource]} alt={RESOURCE_LABEL[resource]} className="pixelated size-6" />
+      <span className="text-[9px] leading-tight">{RESOURCE_LABEL[resource]}</span>
+      {caption ? <span className="text-[9px] leading-tight opacity-75">{caption}</span> : null}
+    </button>
+  );
+}
+
+function Stepper({
   label,
   value,
   onChange,
@@ -724,34 +897,36 @@ function TradeStepper({
 }) {
   return (
     <div>
-      <p className="mb-1 text-[10px] tracking-wider uppercase">{label}</p>
-      <div className="grid grid-cols-5 gap-0.5">
-        {RESOURCES.map((resource) => {
-          const max = cap ? cap[resource] : 8;
+      <p className="mb-1 text-[11px] uppercase">{label}</p>
+      <div className="grid grid-cols-5 gap-1">
+        {RESOURCES.map((r) => {
+          const max = cap ? cap[r] : 6;
           return (
-            <div key={resource} className="flex flex-col items-center gap-0.5">
-              <img src={CHIP_SPRITE[resource]} alt="" className="pixelated size-4" />
-              <span className="text-[11px] tabular-nums">{value[resource]}</span>
-              <span className="flex">
+            <div key={r} className="flex flex-col items-center gap-0.5 bg-[#2a1c16] py-1">
+              <img src={CHIP_SPRITE[r]} alt="" className="pixelated size-6" />
+              <span className="text-[9px] leading-tight">{RESOURCE_LABEL[r]}</span>
+              <span className="text-base leading-tight tabular-nums">{value[r]}</span>
+              <span className="flex gap-0.5">
                 <button
                   type="button"
-                  aria-label={`menos ${label} ${RESOURCE_LABEL[resource]}`}
-                  className="pixel-btn bg-secondary px-1 text-[10px] leading-none"
-                  disabled={value[resource] <= 0}
-                  onClick={() => onChange({ ...value, [resource]: value[resource] - 1 })}
+                  aria-label={`menos ${RESOURCE_LABEL[r]}`}
+                  className="pixel-btn bg-secondary w-5 text-xs disabled:opacity-35"
+                  disabled={value[r] <= 0}
+                  onClick={() => onChange({ ...value, [r]: value[r] - 1 })}
                 >
                   -
                 </button>
                 <button
                   type="button"
-                  aria-label={`mais ${label} ${RESOURCE_LABEL[resource]}`}
-                  className="pixel-btn bg-secondary px-1 text-[10px] leading-none"
-                  disabled={value[resource] >= max}
-                  onClick={() => onChange({ ...value, [resource]: value[resource] + 1 })}
+                  aria-label={`mais ${RESOURCE_LABEL[r]}`}
+                  className="pixel-btn bg-secondary w-5 text-xs disabled:opacity-35"
+                  disabled={value[r] >= max}
+                  onClick={() => onChange({ ...value, [r]: value[r] + 1 })}
                 >
                   +
                 </button>
               </span>
+              {cap ? <span className="text-muted-foreground text-[9px]">tem {cap[r]}</span> : null}
             </div>
           );
         })}
@@ -760,29 +935,129 @@ function TradeStepper({
   );
 }
 
-function tradeTabClass(active: boolean): string {
-  return `pixel-btn px-2 py-0.5 text-[11px] ${active ? "bg-primary text-primary-foreground" : "bg-secondary"}`;
+function PlentyDialog({
+  open,
+  onOpenChange,
+  view,
+  onAction,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  view: PublicView;
+  onAction: (a: Action) => boolean | void;
+}) {
+  const [slots, setSlots] = useState<Array<Resource | null>>([null, null]);
+  useEffect(() => {
+    if (open) setSlots([null, null]);
+  }, [open]);
+  const [a, b] = slots;
+  const action =
+    a && b
+      ? view.legal.find(
+          (x) =>
+            x.type === "PLAY_YEAR_OF_PLENTY" &&
+            ((x.resources[0] === a && x.resources[1] === b) || (x.resources[0] === b && x.resources[1] === a)),
+        )
+      : undefined;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm border-[#8a6410] bg-[#3d2a1f] text-[#f4e8c8]">
+        <DialogHeader>
+          <DialogTitle>Fartura</DialogTitle>
+          <DialogDescription className="text-muted-foreground text-xs">Pegue duas cartas do banco. Podem ser iguais.</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-center gap-2">
+          {slots.map((slot, i) => (
+            <button
+              key={i}
+              type="button"
+              className="resource-card h-20 w-14 justify-center"
+              onClick={() => setSlots((prev) => prev.map((s, j) => (j === i ? null : s)))}
+            >
+              {slot ? <img src={CARD_SPRITE[slot]} alt={RESOURCE_LABEL[slot]} className="pixelated h-14" /> : "?"}
+            </button>
+          ))}
+        </div>
+        <div className="grid grid-cols-5 gap-1">
+          {RESOURCES.map((r) => {
+            const taken = slots.filter((s) => s === r).length;
+            return (
+              <PickChip
+                key={r}
+                resource={r}
+                caption={`banco: ${view.bank[r]}`}
+                selected={taken > 0}
+                disabled={view.bank[r] - taken <= 0 || !slots.includes(null)}
+                onClick={() =>
+                  setSlots((prev) => {
+                    const i = prev.indexOf(null);
+                    if (i < 0) return prev;
+                    const next = [...prev];
+                    next[i] = r;
+                    return next;
+                  })
+                }
+              />
+            );
+          })}
+        </div>
+        <Button
+          disabled={!action}
+          onClick={() => {
+            if (!action) return;
+            onAction(action);
+            onOpenChange(false);
+          }}
+        >
+          Pegar as duas
+        </Button>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
-function fmt(m: ResourceMap): string {
-  return RESOURCES.filter((r) => m[r] > 0)
-    .map((r) => `${m[r]} ${RESOURCE_LABEL[r].toLowerCase()}`)
-    .join(", ");
+function MonopolyDialog({
+  open,
+  onOpenChange,
+  legal,
+  onAction,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  legal: Action[];
+  onAction: (a: Action) => boolean | void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm border-[#8a6410] bg-[#3d2a1f] text-[#f4e8c8]">
+        <DialogHeader>
+          <DialogTitle>Monopólio</DialogTitle>
+          <DialogDescription className="text-muted-foreground text-xs">
+            Todos os outros jogadores entregam a você todas as cartas desse recurso.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-5 gap-1">
+          {RESOURCES.map((r) => (
+            <PickChip
+              key={r}
+              resource={r}
+              caption=""
+              selected={false}
+              disabled={!legal.some((a) => a.type === "PLAY_MONOPOLY" && a.resource === r)}
+              onClick={() => {
+                const a = legal.find((x) => x.type === "PLAY_MONOPOLY" && x.resource === r);
+                if (!a) return;
+                onAction(a);
+                onOpenChange(false);
+              }}
+            />
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
-function devLabel(t: string): string {
-  switch (t) {
-    case "knight":
-      return "Cavaleiro";
-    case "victory":
-      return "Ponto";
-    case "roadBuilding":
-      return "Estradas";
-    case "yearOfPlenty":
-      return "Fartura";
-    case "monopoly":
-      return "Monopólio";
-    default:
-      return t;
-  }
+function tabClass(active: boolean): string {
+  return `pixel-btn flex-1 px-2 py-1 text-xs ${active ? "bg-primary text-primary-foreground" : "bg-secondary"}`;
 }

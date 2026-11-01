@@ -32,3 +32,13 @@ export const TERRAIN_COLOR: Record<string, number> = {
 };
 
 export { HEX_SIZE, SPRITE_SIZE } from "./assets.ts";
+
+/** Darkens (k < 0) or lightens (k > 0) a 0xRRGGBB color by a 0..1 factor. */
+export function shade(color: number, k: number): number {
+  const ch = (shift: number) => {
+    const c = (color >> shift) & 0xff;
+    const v = k < 0 ? c * (1 + k) : c + (255 - c) * k;
+    return Math.max(0, Math.min(255, Math.round(v))) << shift;
+  };
+  return ch(16) | ch(8) | ch(0);
+}
