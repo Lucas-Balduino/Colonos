@@ -14,7 +14,8 @@ Fan game of Catan's base rules in pixel art. Vite + React 19 + TypeScript + Tail
 - `src/core` — pure rules. `reduce(state, action)` validates shape (`validate.ts`) then rules. Never trust actions: they arrive as raw JSON from the server.
 - `src/ai/bot.ts` — deterministic heuristic bots (no `Math.random`). Goal planning, expansion search, trades, all dev cards.
 - `src/client` — `BoardView.tsx` (Pixi board), `Hud.tsx` (tray: scrolling middle + fixed bottom band), `GameScreen.tsx` (layout, mobile bar).
-- `src/server` — in-memory rooms. In dev it ignores `PORT` (that belongs to Vite).
+- `src/server/rooms.ts` — in-memory rooms (`createRoomServer`, tested with real sockets in `tests/rooms.test.ts`). A seat belongs to its token: reloads and drops rejoin the same seat; after 60 s away a bot plays the seat until the person returns. `index.ts` only serves files; in dev it ignores `PORT` (that belongs to Vite).
+- `src/client/NetMatch.tsx` + `useNetGame.ts` — online room: waiting room, table, ranking. The seat is kept per tab in `sessionStorage` (auto-resume on reload via `?sala=CODE`) and in `localStorage` for the lobby's "Voltar à sala" button.
 
 ## Decisions
 

@@ -5,24 +5,48 @@ import type { CreateGameOptions, GameState } from "../core/types.ts";
 import { isMuted, setMuted, sfx } from "./audio.ts";
 import { preloadSprites } from "./preload.ts";
 import { readSoloSave } from "./solo-save.ts";
+import { readNetSession, type NetSession } from "./useNetGame.ts";
 
 export type LobbyIntent =
   | { mode: "solo"; opts: CreateGameOptions; viewerId: string; initial?: GameState }
   | { mode: "hotseat"; opts: CreateGameOptions; viewerId: string }
   | { mode: "host"; name: string; bots: number; setup: "beginner" | "random" }
-  | { mode: "join"; name: string; code: string };
+  | { mode: "join"; name: string; code: string }
+  | { mode: "resume"; session: NetSession };
 
 const COLORS = ["#c44536", "#2b6cb0", "#d97706", "#e8e0d0"];
 
-export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
-  const [name, setName] = useState("Você");
+export function Lobby({
+  onStart,
+  joinCode = null,
+}: {
+  onStart: (intent: LobbyIntent) => void;
+  /** Came in through a room link: open the web panel with the code filled. */
+  joinCode?: string | null;
+}) {
+  const [name, setName] = useState(() => {
+    try {
+      return localStorage.getItem("colonos-nome") || "Você";
+    } catch {
+      return "Você";
+    }
+  });
   const [setup, setSetup] = useState<"beginner" | "random">("beginner");
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(joinCode ?? "");
   const [hotseats, setHotseats] = useState(4);
   const [bots, setBots] = useState(3);
   const [mute, setMute] = useState(isMuted());
   const [more, setMore] = useState<"none" | "hotseat" | "web">("none");
   const [saved] = useState(() => readSoloSave());
+  const [room] = useState(() => readNetSession());
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("colonos-nome", name);
+    } catch {
+      /* ignore */
+    }
+  }, [name]);
 
   useEffect(() => {
     preloadSprites();
@@ -66,6 +90,48 @@ export function Lobby({ onStart }: { onStart: (intent: LobbyIntent) => void }) {
       />
       <div className="lobby-vignette absolute inset-0" />
       <div className="relative mx-auto flex min-h-dvh max-w-lg flex-col justify-end gap-4 p-4 pb-8 sm:justify-center">
+        {joinCode ? (
+          <section className="wood-panel p-4">
+            <p className="text-gold text-[10px] tracking-[0.24em] uppercase">Convite</p>
+            <h2 className="text-lg">Sala {joinCode}</h2>
+            <label className="mt-2 block text-sm">
+              Seu nome na mesa
+              <Input className="mt-1" value={name} onChange={(e) => setName(e.target.value)} maxLength={16} />
+            </label>
+            {room?.code === joinCode ? (
+              <Button
+                className="mt-3 h-12 w-full text-base"
+                onClick={() => {
+                  sfx("click");
+                  onStart({ mode: "resume", session: room });
+                }}
+              >
+                Voltar ao meu lugar
+              </Button>
+            ) : null}
+            <Button
+              className="mt-3 h-12 w-full text-base"
+              variant={room?.code === joinCode ? "secondary" : "default"}
+              onClick={() => {
+                sfx("click");
+                onStart({ mode: "join", name, code: joinCode });
+              }}
+            >
+              {room?.code === joinCode ? "Entrar como outra pessoa" : "Entrar na sala"}
+            </Button>
+          </section>
+        ) : null}
+        {room && room.code !== joinCode ? (
+          <Button
+            className="h-12 w-full text-base"
+            onClick={() => {
+              sfx("click");
+              onStart({ mode: "resume", session: room });
+            }}
+          >
+            Voltar à sala {room.code}
+          </Button>
+        ) : null}
         {saved ? (
           <Button
             className="h-12 w-full text-base"

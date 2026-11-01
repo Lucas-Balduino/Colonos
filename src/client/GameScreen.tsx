@@ -51,7 +51,7 @@ export function GameScreen({
         </div>
       ) : null}
       {state.phase.type === "gameOver" && onReplay ? (
-        <GameOver state={state} onReplay={onReplay} onLobby={onLeave} />
+        <GameOver view={projectStateFor(state, viewerId)} onReplay={onReplay} onLobby={onLeave} />
       ) : null}
     </>
   );

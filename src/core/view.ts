@@ -1,7 +1,7 @@
 import { legalActions } from "./legal.ts";
 import { countResources } from "./resources.ts";
 import { bestBankRatio } from "./rules.ts";
-import { visibleVictoryPoints } from "./scoring.ts";
+import { totalVictoryPoints, visibleVictoryPoints } from "./scoring.ts";
 import {
   RESOURCES,
   type GameEvent,
@@ -63,5 +63,13 @@ export function projectStateFor(state: GameState, viewerId: PlayerId | null): Pu
     legal: viewerId ? legalActions(state, viewerId) : [],
     setup: state.setup,
     winnerId: state.phase.type === "gameOver" ? state.phase.winner : null,
+    final:
+      state.phase.type === "gameOver"
+        ? state.players.map((p) => ({
+            id: p.id,
+            total: totalVictoryPoints(p, state.longestRoadPlayerId, state.largestArmyPlayerId),
+            victoryCards: p.devCards.filter((c) => c.type === "victory").length,
+          }))
+        : undefined,
   };
 }

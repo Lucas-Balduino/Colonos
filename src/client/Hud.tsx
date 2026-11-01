@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog.tsx";
 import { RESOURCES, RESOURCE_LABEL, countResources, emptyResources } from "../core/index.ts";
-import type { Action, DevCardType, PublicPlayerView, PublicView, Resource, ResourceMap, TradeOffer } from "../core/types.ts";
+import type { Action, DevCardType, Presence, PublicPlayerView, PublicView, Resource, ResourceMap, TradeOffer } from "../core/types.ts";
 import { CARD_SPRITE, CHIP_SPRITE, diceSprite, settlementSprite } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import type { BuildMode } from "./copy.ts";
@@ -161,6 +161,7 @@ function PlayerList({ view }: { view: PublicView }) {
           winner={p.id === view.winnerId}
           longest={view.longestRoadPlayerId === p.id}
           army={view.largestArmyPlayerId === p.id}
+          presence={view.presence?.[p.id]}
         />
       ))}
     </div>
@@ -173,12 +174,14 @@ function PlayerRow({
   winner,
   longest,
   army,
+  presence,
 }: {
   player: PublicPlayerView;
   current: boolean;
   winner: boolean;
   longest: boolean;
   army: boolean;
+  presence?: Presence;
 }) {
   const nameColor = player.color === "#e8e0d0" ? "#f4e8c8" : player.color;
   return (
@@ -195,6 +198,8 @@ function PlayerRow({
             {player.isYou ? "Você" : player.name}
           </span>
           {player.isBot ? <span className="text-muted-foreground text-[10px]">bot</span> : null}
+          {presence === "away" ? <span className="text-[10px] text-[#e0b33a]">reconectando…</span> : null}
+          {presence === "autopilot" ? <span className="text-[10px] text-[#e0b33a]">bot no lugar</span> : null}
           {current ? <span className="gold-ribbon px-1 text-[9px] leading-tight">VEZ</span> : null}
         </p>
         <p className="text-muted-foreground text-[11px] leading-tight">

@@ -219,11 +219,15 @@ function tradeReply(state: GameState, playerId: PlayerId): Action | null {
   return null;
 }
 
-export function pendingBotTrades(state: GameState): Action[] {
+/** Who the bots play for. Online, a human who dropped is played by a bot too. */
+export type BotSeat = (player: Player) => boolean;
+const seatIsBot: BotSeat = (player) => player.isBot;
+
+export function pendingBotTrades(state: GameState, isBot: BotSeat = seatIsBot): Action[] {
   if (state.phase.type !== "main") return [];
   const actions: Action[] = [];
   for (const player of state.players) {
-    if (!player.isBot) continue;
+    if (!isBot(player)) continue;
     const reply = tradeReply(state, player.id);
     if (reply) actions.push(reply);
   }
@@ -231,9 +235,10 @@ export function pendingBotTrades(state: GameState): Action[] {
 }
 
 /** A bot's own open offer that only humans still have to answer. */
-export function staleBotOffer(state: GameState): Action | null {
+export function staleBotOffer(state: GameState, isBot: BotSeat = seatIsBot): Action | null {
+  if (state.phase.type !== "main") return null;
   const actor = currentPlayer(state);
-  if (!actor.isBot) return null;
+  if (!isBot(actor)) return null;
   const offer = state.tradeOffers.find((o) => o.from === actor.id);
   if (!offer) return null;
   return { type: "CANCEL_TRADE", playerId: actor.id, offerId: offer.id };
@@ -524,16 +529,16 @@ export function whoseTurn(state: GameState): PlayerId {
   return currentPlayer(state).id;
 }
 
-export function nextBotAction(state: GameState): Action | null {
+export function nextBotAction(state: GameState, isBot: BotSeat = seatIsBot): Action | null {
   if (state.phase.type === "gameOver") return null;
   const actor = whoseTurn(state);
   const actorP = state.players.find((p) => p.id === actor);
-  if (actorP?.isBot) {
+  if (actorP && isBot(actorP)) {
     const act = chooseBotAction(state, actor);
     if (act) return act;
   }
   for (const other of state.players) {
-    if (!other.isBot || other.id === actor) continue;
+    if (!isBot(other) || other.id === actor) continue;
     const act = tradeReply(state, other.id);
     if (act) return act;
   }

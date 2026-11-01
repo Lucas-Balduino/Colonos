@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Toaster } from "@/components/ui/sonner.tsx";
-import { Button } from "@/components/ui/button.tsx";
-import { Lobby, type LobbyIntent } from "./client/Lobby.tsx";
-import { GameScreen, TableLayout } from "./client/GameScreen.tsx";
+import { Lobby } from "./client/Lobby.tsx";
+import { GameScreen } from "./client/GameScreen.tsx";
+import { NetMatch } from "./client/NetMatch.tsx";
+import { readNetSession, type NetIntent } from "./client/useNetGame.ts";
 import { useLocalGame } from "./client/useLocalGame.ts";
-import { useNetGame } from "./client/useNetGame.ts";
 import { buildScenario, isScenarioName, type ScenarioName } from "./dev/scenarios.ts";
 import { clearSoloSave } from "./client/solo-save.ts";
 import type { CreateGameOptions, GameState } from "./core/types.ts";
@@ -22,7 +22,7 @@ type LocalScreen = {
 type Screen =
   | { kind: "lobby" }
   | LocalScreen
-  | { kind: "net"; intent: Extract<LobbyIntent, { mode: "host" } | { mode: "join" }> }
+  | { kind: "net"; intent: NetIntent; id: number }
   | { kind: "scene"; name: ScenarioName };
 
 function sceneFromUrl(): ScenarioName | null {
@@ -31,10 +31,20 @@ function sceneFromUrl(): ScenarioName | null {
   return name && isScenarioName(name) ? name : null;
 }
 
+/** `?sala=CODE`: our own seat comes back; anyone else gets the join form filled in. */
+function roomFromUrl(): string | null {
+  const code = new URLSearchParams(window.location.search).get("sala")?.toUpperCase() ?? null;
+  return code && /^[A-Z2-9]{6}$/.test(code) ? code : null;
+}
+
 export default function App() {
+  const [linkCode] = useState(roomFromUrl);
   const [screen, setScreen] = useState<Screen>(() => {
     const scene = sceneFromUrl();
-    return scene ? { kind: "scene", name: scene } : { kind: "lobby" };
+    if (scene) return { kind: "scene", name: scene };
+    const session = readNetSession("tab");
+    if (linkCode && session?.code === linkCode) return { kind: "net", intent: { mode: "resume", session }, id: Date.now() };
+    return { kind: "lobby" };
   });
 
   return (
@@ -62,9 +72,10 @@ export default function App() {
                 id: Date.now(),
               });
             } else {
-              setScreen({ kind: "net", intent });
+              setScreen({ kind: "net", intent, id: Date.now() });
             }
           }}
+          joinCode={linkCode}
         />
       ) : null}
       {screen.kind === "local" ? (
@@ -87,7 +98,7 @@ export default function App() {
         />
       ) : null}
       {screen.kind === "net" ? (
-        <NetMatch intent={screen.intent} onLeave={() => setScreen({ kind: "lobby" })} />
+        <NetMatch key={screen.id} intent={screen.intent} onLeave={() => setScreen({ kind: "lobby" })} />
       ) : null}
       {screen.kind === "scene" ? (
         <SceneMatch
@@ -165,58 +176,5 @@ function SceneMatch({ name, onLeave }: { name: ScenarioName; onLeave: () => void
       initial={round.n === 0 ? boot : undefined}
       persist={false}
     />
-  );
-}
-
-function NetMatch({
-  intent,
-  onLeave,
-}: {
-  intent: Extract<LobbyIntent, { mode: "host" } | { mode: "join" }>;
-  onLeave: () => void;
-}) {
-  const net = useNetGame();
-
-  useEffect(() => {
-    if (intent.mode === "host") net.create(intent.name, intent.bots, intent.setup);
-    else net.join(intent.code, intent.name);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- connect once per mount
-  }, []);
-
-  if (net.view) {
-    return (
-      <TableLayout view={net.view} onAction={net.dispatch} interactive onLeave={onLeave} events={net.events} />
-    );
-  }
-
-  return (
-    <div className="relative mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-4 p-6">
-      <div className="wood-panel p-5">
-        <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Sala</p>
-        <h2 className="text-2xl font-bold">{net.lobby?.code ?? (net.connected ? "…" : "Conectando…")}</h2>
-        <p className="text-muted-foreground mt-2 text-sm">
-          {net.connected
-            ? "Compartilhe o código com amigos. O anfitrião inicia quando houver pelo menos 3 assentos (humanos + bots)."
-            : "Abrindo o porto… se travar, volte ao lobby e tente de novo."}
-        </p>
-        {(net.lobby?.players ?? []).length === 0 ? (
-          <p className="text-muted-foreground mt-3 text-sm">Ninguém sentou ainda.</p>
-        ) : (
-          <ul className="mt-3 space-y-1 text-sm">
-            {net.lobby!.players.map((p) => (
-              <li key={p.id}>
-                {p.name} {p.isBot ? "· bot" : ""}
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="mt-4 flex flex-wrap gap-2">
-          {net.lobby?.host ? <Button onClick={net.start}>Começar partida</Button> : <p>Aguardando o anfitrião…</p>}
-          <Button variant="ghost" onClick={onLeave}>
-            Voltar
-          </Button>
-        </div>
-      </div>
-    </div>
   );
 }

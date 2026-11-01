@@ -42,6 +42,7 @@ export function parseClientMsg(raw: string): ClientMsg | null {
   }
 
   if (data.type === "start") return { type: "start" };
+  if (data.type === "leave") return { type: "leave" };
 
   if (data.type === "action") {
     if (!isRecord(data.action)) return null;

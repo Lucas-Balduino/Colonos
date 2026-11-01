@@ -233,6 +233,18 @@ export interface PublicView {
   legal: Action[];
   setup: "beginner" | "random";
   winnerId: PlayerId | null;
+  /** Only once the game is over: every hidden point is revealed. */
+  final?: FinalScore[];
+  /** Online only: who is connected, who dropped, who a bot plays for. */
+  presence?: Record<PlayerId, Presence>;
+}
+
+export type Presence = "online" | "away" | "autopilot" | "bot";
+
+export interface FinalScore {
+  id: PlayerId;
+  total: number;
+  victoryCards: number;
 }
 
 export interface CreateGameOptions {

@@ -751,7 +751,7 @@ export function BoardView({
         <AnimClockProvider>
         <pixiContainer x={size.w / 2 + pan.x + nudge} y={size.h / 2 + pan.y} scale={zoom}>
           <pixiContainer x={-origin.x} y={-origin.y}>
-            <IslandPicture board={view.board} textures={textures} origin={origin} />
+            {textures ? <IslandPicture board={view.board} textures={textures} origin={origin} /> : null}
             {sortedEdges.map((edge) => {
               const a = vertexPos(view.board, edge.vertices[0]);
               const b = vertexPos(view.board, edge.vertices[1]);
@@ -1312,21 +1312,9 @@ const IslandPicture = memo(function IslandPicture({
   textures: Record<string, Texture> | null;
   origin: { x: number; y: number };
 }) {
-  const ref = useRef<Container | null>(null);
-  const cacheKey = `${board.robberHexId}|${textures ? Object.keys(textures).length : 0}`;
-  useEffect(() => {
-    const container = ref.current;
-    if (!container) return;
-    container.cacheAsTexture(false);
-    container.cacheAsTexture({ antialias: false, resolution: 1, scaleMode: "nearest" });
-    container.updateCacheTexture();
-    return () => {
-      container.cacheAsTexture(false);
-    };
-  }, [cacheKey]);
   const land = Object.values(board.hexes).sort((a, b) => b.r - a.r || b.q - a.q);
   return (
-    <pixiContainer ref={ref}>
+    <pixiContainer>
       {seaRing().map((h) => {
         const p = pointyHexToPixel(h, HEX_SIZE);
         const tex = textures?.["/sprites/hex-sea.png"];
