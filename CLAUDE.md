@@ -7,13 +7,14 @@ Fan game of Catan's base rules in pixel art. Vite + React 19 + TypeScript + Tail
 - `npm run dev` — client on 43123, room server on 43124 (Vite proxies `/ws`).
 - `npm run check` — typecheck, lint, tests, build. Must stay green.
 - `npm run sim -- 50` — 50 bot-only games with rule invariants; prints median rounds and trades.
-- `npm run art` — redraws terrain tiles, resource icons and cards, dev cards, the sea tile and the lobby poster from `scripts/art/` (seeded, same bytes every run). Pass a folder to also get zoomed contact sheets. Houses, roads, robber, dice, ports and the number token are still the older PNGs.
+- `npm run art` — redraws the HUD icons and cards, the sea tile and the lobby poster (`scripts/art/`, seeded). Pass a folder to also get a zoomed contact sheet. Houses, roads, robber, dice, ports and the number token are still older PNGs.
 - Dev scenes: `/?cena=fundacao|turno|construir|ladrao-dois-vizinhos|cartas|porto|troca|descarte|fim`.
 
 ## Layout
 
 - `src/core` — pure rules. `reduce(state, action)` validates shape (`validate.ts`) then rules. Never trust actions: they arrive as raw JSON from the server.
 - `src/ai/bot.ts` — deterministic heuristic bots (no `Math.random`). Goal planning, expansion search, trades, all dev cards.
+- `src/art` — pure procedural pixel art (island painter, props, palette), shared by the client and `scripts/art.ts`.
 - `src/client` — `BoardView.tsx` (Pixi board), `Hud.tsx` (tray: scrolling middle + fixed bottom band), `GameScreen.tsx` (layout, mobile bar).
 - `src/server/rooms.ts` — in-memory rooms (`createRoomServer`, tested with real sockets in `tests/rooms.test.ts`). A seat belongs to its token: reloads and drops rejoin the same seat; after 60 s away a bot plays the seat until the person returns. `index.ts` only serves files; in dev it ignores `PORT` (that belongs to Vite).
 - `src/client/NetMatch.tsx` + `useNetGame.ts` — online room: waiting room, table, ranking. The seat is kept per tab in `sessionStorage` (auto-resume on reload via `?sala=CODE`) and in `localStorage` for the lobby's "Voltar à sala" button.
@@ -25,7 +26,7 @@ Fan game of Catan's base rules in pixel art. Vite + React 19 + TypeScript + Tail
 - Ports are spread evenly around the coast; random maps never put 6/8 side by side.
 - Roads are drawn as planks in the owner's color. Build targets: parchment dashes (roads) and rings (intersections).
 - Camera frames the land plus docks, not the sea.
-- Art direction is a diorama: light from the top left, tiles with a raised bevel, earth strata under the south coast (`CLIFF_BANDS` in `BoardView.tsx`, mirrored in `scripts/art/poster.ts`), autumn trees for the lantern island. Panels and buttons are blocks with a band of earth under them (`.wood-panel`, `.pixel-btn`).
+- The island is one painted world, not tiles: `src/art/world.ts` paints it per map in a Web Worker (`useIslandArt`), 2 texels per world pixel. Biome borders wobble and blend, the coast has its own outline (it only grows past the hexes, so coastal corners stay on land), earth strata show under the south shore, and trees or peaks may lean over neighbors. Props keep clear of the token, corners and road lines. Panels and buttons are blocks with a band of earth under them (`.wood-panel`, `.pixel-btn`).
 - Icons are 16 px and cards 24x34 at native size: show them only at 1x or 2x so pixels stay crisp.
 - Each player's longest road is in the public view (`roadLength`) and shown in the player list.
 

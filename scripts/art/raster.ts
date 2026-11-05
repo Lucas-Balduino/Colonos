@@ -1,169 +1,131 @@
-/**
- * Tiny pixel canvas for the procedural art. Everything is seeded, so running
- * `npm run art` twice writes the same bytes.
- */
+/** Node side of the art: writes rasters as PNG files. */
 import { writeFileSync } from "node:fs";
+import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
+import type { Raster } from "../../src/art/raster.ts";
+
+export * from "../../src/art/raster.ts";
 
 const { PNG } = createRequire(import.meta.url)("pngjs") as {
   PNG: { new (o: { width: number; height: number }): { data: Buffer }; sync: { write(p: unknown): Buffer } };
 };
 
-export type RGB = readonly [number, number, number];
-
-export function hex(c: string): RGB {
-  const n = Number.parseInt(c.replace("#", ""), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+export function writePng(r: Raster, file: string): void {
+  const png = new PNG({ width: r.w, height: r.h });
+  png.data.set(r.data);
+  writeFileSync(file, PNG.sync.write(png));
 }
 
-export function mix(a: RGB, b: RGB, t: number): RGB {
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-}
-
-export function scale(c: RGB, k: number): RGB {
-  return [c[0] * k, c[1] * k, c[2] * k];
-}
-
-export class Raster {
-  readonly data: Uint8ClampedArray;
-  constructor(
-    readonly w: number,
-    readonly h: number,
-  ) {
-    this.data = new Uint8ClampedArray(w * h * 4);
+export function scaleUp(src: Raster, k: number): Raster {
+  const out = new (src.constructor as new (w: number, h: number) => Raster)(src.w * k, src.h * k);
+  for (let y = 0; y < out.h; y++) {
+    for (let x = 0; x < out.w; x++) {
+      const c = src.get(Math.floor(x / k), Math.floor(y / k));
+      if (c) out.set(x, y, c, src.alpha(Math.floor(x / k), Math.floor(y / k)));
+    }
   }
-
-  inside(x: number, y: number): boolean {
-    return x >= 0 && y >= 0 && x < this.w && y < this.h;
-  }
-
-  get(x: number, y: number): RGB | null {
-    if (!this.inside(x, y)) return null;
-    const i = (y * this.w + x) * 4;
-    if (this.data[i + 3] === 0) return null;
-    return [this.data[i]!, this.data[i + 1]!, this.data[i + 2]!];
-  }
-
-  alpha(x: number, y: number): number {
-    return this.inside(x, y) ? this.data[(y * this.w + x) * 4 + 3]! : 0;
-  }
-
-  set(x: number, y: number, c: RGB, a = 255): void {
-    x = Math.floor(x);
-    y = Math.floor(y);
-    if (!this.inside(x, y)) return;
-    const i = (y * this.w + x) * 4;
-    this.data[i] = c[0];
-    this.data[i + 1] = c[1];
-    this.data[i + 2] = c[2];
-    this.data[i + 3] = a;
-  }
-
-  /** Multiplies an existing pixel (shadows, bevels). */
-  tint(x: number, y: number, k: number): void {
-    const c = this.get(Math.floor(x), Math.floor(y));
-    if (c) this.set(x, y, scale(c, k), this.alpha(Math.floor(x), Math.floor(y)));
-  }
-
-  toPng(file: string): void {
-    const png = new PNG({ width: this.w, height: this.h });
-    png.data.set(this.data);
-    writeFileSync(file, PNG.sync.write(png));
-  }
+  return out;
 }
 
-/* ---------- randomness and noise ---------- */
+/* ---------- indexed PNG (for the big poster) ---------- */
 
-export function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
-function hash2(x: number, y: number, seed: number): number {
-  let h = (x * 374761393 + y * 668265263 + seed * 2147483647) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
-/** Smooth value noise. `period` makes it tile (for the sea). */
-export function noise(x: number, y: number, seed: number, period = 0): number {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const fx = x - x0;
-  const fy = y - y0;
-  const wrap = (v: number) => (period ? ((v % period) + period) % period : v);
-  const s = (t: number) => t * t * (3 - 2 * t);
-  const v = (ix: number, iy: number) => hash2(wrap(ix), wrap(iy), seed);
-  const a = v(x0, y0) + (v(x0 + 1, y0) - v(x0, y0)) * s(fx);
-  const b = v(x0, y0 + 1) + (v(x0 + 1, y0 + 1) - v(x0, y0 + 1)) * s(fx);
-  return a + (b - a) * s(fy);
-}
-
-export function fbm(x: number, y: number, seed: number, octaves = 3, period = 0): number {
-  let sum = 0;
-  let amp = 1;
-  let total = 0;
-  let f = 1;
-  for (let o = 0; o < octaves; o++) {
-    sum += noise(x * f, y * f, seed + o * 17, period ? period * f : 0) * amp;
-    total += amp;
-    amp *= 0.5;
-    f *= 2;
-  }
-  return sum / total;
-}
-
-const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16);
-
-export function bayer(x: number, y: number): number {
-  return BAYER[(y & 3) * 4 + (x & 3)]!;
-}
-
-/** Picks a ramp color for t in [0, 1] with ordered dithering between steps. */
-export function ramp(colors: readonly RGB[], t: number, x: number, y: number): RGB {
-  const v = Math.max(0, Math.min(0.9999, t)) * (colors.length - 1);
-  const i = Math.floor(v);
-  const frac = v - i;
-  return colors[Math.min(colors.length - 1, frac > bayer(x, y) ? i + 1 : i)]!;
-}
-
-/* ---------- hex geometry (pointy top) ---------- */
-
-export const HEX_R = 56;
-export const TILE_W = 97;
-export const TILE_H = 112;
-export const CX = TILE_W / 2;
-export const CY = TILE_H / 2;
-const SQ3 = Math.sqrt(3);
-
-/** Signed distance to the hex border in pixels (positive inside). */
-export function hexInset(x: number, y: number, r = HEX_R + 0.65): number {
-  const dx = Math.abs(x + 0.5 - CX);
-  const dy = Math.abs(y + 0.5 - CY);
-  const side = (SQ3 / 2) * r - dx;
-  const slant = ((r - dy) * SQ3) / 2 - dx / 2;
-  return Math.min(side, slant);
-}
-
-/** Which way the nearest border faces: 1 = toward the light (top left), -1 = away. */
-export function borderLight(x: number, y: number): number {
-  const dx = x + 0.5 - CX;
-  const dy = y + 0.5 - CY;
-  const ang = Math.atan2(dy, dx);
-  const edge = Math.round(ang / (Math.PI / 3));
-  const nx = Math.cos(edge * (Math.PI / 3));
-  const ny = Math.sin(edge * (Math.PI / 3));
-  return -(nx * 0.55 + ny * 0.85);
-}
-
-/** Hex corners, where houses sit. Props stay clear of these. */
-export const CORNERS = Array.from({ length: 6 }, (_, i) => {
-  const a = ((60 * i - 30) * Math.PI) / 180;
-  return { x: CX + HEX_R * Math.cos(a), y: CY + HEX_R * Math.sin(a) };
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
 });
+
+function chunk(type: string, data: Buffer): Buffer {
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  let crc = 0xffffffff;
+  for (const b of body) crc = CRC_TABLE[(crc ^ b) & 0xff]! ^ (crc >>> 8);
+  const out = Buffer.alloc(body.length + 8);
+  out.writeUInt32BE(data.length, 0);
+  body.copy(out, 4);
+  out.writeUInt32BE((crc ^ 0xffffffff) >>> 0, body.length + 4);
+  return out;
+}
+
+/** Median cut down to 256 colors, then an 8-bit palette PNG. Opaque images only. */
+export function writeIndexedPng(r: Raster, file: string): void {
+  const counts = new Map<number, number>();
+  for (let i = 0; i < r.w * r.h; i++) {
+    const k = (r.data[i * 4]! << 16) | (r.data[i * 4 + 1]! << 8) | r.data[i * 4 + 2]!;
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  type Entry = [number, number, number, number];
+  let boxes: Entry[][] = [[...counts].map(([k, n]) => [(k >> 16) & 255, (k >> 8) & 255, k & 255, n] as Entry)];
+  while (boxes.length < 256) {
+    let pick = -1;
+    let spread = 0;
+    let axis = 0;
+    boxes.forEach((box, i) => {
+      if (box.length < 2) return;
+      for (let a = 0; a < 3; a++) {
+        let lo = 255;
+        let hi = 0;
+        for (const e of box) {
+          lo = Math.min(lo, e[a]!);
+          hi = Math.max(hi, e[a]!);
+        }
+        if (hi - lo > spread) {
+          spread = hi - lo;
+          pick = i;
+          axis = a;
+        }
+      }
+    });
+    if (pick < 0) break;
+    const box = boxes[pick]!.sort((p, q) => p[axis]! - q[axis]!);
+    const total = box.reduce((s, e) => s + e[3], 0);
+    let acc = 0;
+    let cut = 1;
+    for (; cut < box.length - 1; cut++) {
+      acc += box[cut - 1]![3];
+      if (acc >= total / 2) break;
+    }
+    boxes = [...boxes.slice(0, pick), box.slice(0, cut), box.slice(cut), ...boxes.slice(pick + 1)];
+  }
+  const palette = boxes.map((box) => {
+    const n = box.reduce((s, e) => s + e[3], 0);
+    return [0, 1, 2].map((a) => Math.round(box.reduce((s, e) => s + e[a]! * e[3], 0) / n));
+  });
+  const index = new Map<number, number>();
+  for (const k of counts.keys()) {
+    const c = [(k >> 16) & 255, (k >> 8) & 255, k & 255];
+    let best = 0;
+    let bestD = Infinity;
+    palette.forEach((p, i) => {
+      const d = (p[0]! - c[0]!) ** 2 + (p[1]! - c[1]!) ** 2 + (p[2]! - c[2]!) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    index.set(k, best);
+  }
+  const raw = Buffer.alloc((r.w + 1) * r.h);
+  for (let y = 0; y < r.h; y++) {
+    raw[y * (r.w + 1)] = 0;
+    for (let x = 0; x < r.w; x++) {
+      const i = (y * r.w + x) * 4;
+      raw[y * (r.w + 1) + 1 + x] = index.get((r.data[i]! << 16) | (r.data[i + 1]! << 8) | r.data[i + 2]!)!;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(r.w, 0);
+  ihdr.writeUInt32BE(r.h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 3;
+  writeFileSync(
+    file,
+    Buffer.concat([
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      chunk("IHDR", ihdr),
+      chunk("PLTE", Buffer.from(palette.flat())),
+      chunk("IDAT", deflateSync(raw, { level: 9 })),
+      chunk("IEND", Buffer.alloc(0)),
+    ]),
+  );
+}

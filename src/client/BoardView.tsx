@@ -4,7 +4,7 @@ import { LocateFixed, Minus, Plus } from "lucide-react";
 import { Container, Graphics, Sprite, Text, Texture, TilingSprite } from "pixi.js";
 import type { Graphics as PixiGraphics } from "pixi.js";
 import { toast } from "sonner";
-import { addAxial, cubeDistance, HEX_DIRS, hexCorner, hexId, parseHexId, pointyHexToPixel } from "../core/hex.ts";
+import { cubeDistance, hexCorner, hexId, parseHexId, pointyHexToPixel } from "../core/hex.ts";
 import { RESOURCE_LABEL } from "../core/resources.ts";
 import type { Action, Board, HexId, PublicView } from "../core/types.ts";
 import {
@@ -12,15 +12,14 @@ import {
   CHIP_SPRITE,
   citySprite,
   HEX_SIZE,
-  HEX_SPRITE_ANCHOR,
   settlementSprite,
-  TERRAIN_SPRITE,
 } from "./assets.ts";
 import { sfx } from "./audio.ts";
-import { FACTION_HEX, PALETTE, shade, TERRAIN_COLOR } from "./theme.ts";
+import { FACTION_HEX, PALETTE, shade } from "./theme.ts";
 import { AnimClockProvider, animFrameNow, useAnimFrame } from "./anim-clock.tsx";
 import { buildModeCopy, phaseCopy, type BuildMode } from "./copy.ts";
 import { preloadSprites } from "./preload.ts";
+import { useIslandArt, type IslandTexture } from "./useIslandArt.ts";
 import { FxLayer } from "./fx/FxLayer.tsx";
 import { holdFx, motionMs, type EventBatch } from "./fx/batch.ts";
 
@@ -216,6 +215,11 @@ export function BoardView({
   armedRef.current = armed;
   const fit = computeFit(size.w, size.h);
   const zoom = pinchZoom == null ? Math.min(3, fit * nivel) : Math.min(3, Math.max(fit, pinchZoom));
+  const island = useIslandArt(view.board);
+  // the island has 2 texels per world pixel: crisp pixels once they are big enough
+  useEffect(() => {
+    if (island) island.texture.source.scaleMode = zoom / island.scale >= 1 ? "nearest" : "linear";
+  }, [island, zoom]);
   fitRef.current = fit;
   zoomRef.current = zoom;
   if (import.meta.env.DEV) {
@@ -747,7 +751,7 @@ export function BoardView({
         <AnimClockProvider>
         <pixiContainer x={size.w / 2 + pan.x + nudge} y={size.h / 2 + pan.y} scale={zoom}>
           <pixiContainer x={-origin.x} y={-origin.y}>
-            {textures ? <IslandPicture board={view.board} textures={textures} origin={origin} /> : null}
+            {textures && island ? <IslandPicture board={view.board} textures={textures} art={island} origin={origin} /> : null}
             {sortedEdges.map((edge) => {
               const a = vertexPos(view.board, edge.vertices[0]);
               const b = vertexPos(view.board, edge.vertices[1]);
@@ -901,7 +905,7 @@ export function BoardView({
       >
         {portHint(view.board.ports.find((port) => port.edgeId === tipId))}
       </div>
-      {!textures ? <TableLoading progress={progress} /> : null}
+      {!textures || !island ? <TableLoading progress={textures ? 0.95 : progress * 0.9} /> : null}
     </div>
   );
 }
@@ -970,7 +974,7 @@ function TableLoading({ progress }: { progress: number }) {
       <div className="relative wood-panel max-w-sm p-5 text-center">
         <p className="text-gold text-[10px] tracking-[0.28em] uppercase">Ilha das Lanternas</p>
         <h2 className="mt-1 text-2xl">Preparando a mesa</h2>
-        <p className="text-muted-foreground mt-2 text-sm">As lanternas acendem. Os terrenos encaixam uns nos outros.</p>
+        <p className="text-muted-foreground mt-2 text-sm">As lanternas acendem. A ilha ganha forma.</p>
         <div className="mt-4 h-3 w-full border-2 border-[#8a6410] bg-[#1a1520]">
           <div className="h-full bg-[#d4a017]" style={{ width: `${pct}%` }} />
         </div>
@@ -1000,127 +1004,6 @@ function SeaWater({ texture }: { texture?: Texture }) {
       />
     </pixiContainer>
   );
-}
-
-/** How far the island's earth shows below the land, like a diorama. */
-const CLIFF_DEPTH = 16;
-const CLIFF_BANDS: Array<{ at: number; color: number; seam: number }> = [
-  { at: 16, color: 0x2e2a33, seam: 0x4a4552 },
-  { at: 12, color: 0x463f45, seam: 0x625a5e },
-  { at: 8, color: 0x5a3a22, seam: 0x7a5232 },
-  { at: 4, color: 0x76512e, seam: 0x97703f },
-];
-
-function seeded(n: number): number {
-  const x = Math.sin(n * 127.1) * 43758.5453;
-  return x - Math.floor(x);
-}
-
-/** Earth strata under the coast, the island's shadow, and surf at its foot. */
-const IslandCliff = memo(function IslandCliff({ board }: { board: Board }) {
-  const draw = useCallback(
-    (g: PixiGraphics) => {
-      g.clear();
-      const hexes = Object.values(board.hexes);
-      const poly = (cx: number, cy: number, size: number) => {
-        const pts: number[] = [];
-        for (let i = 0; i < 6; i++) {
-          const c = hexCorner({ x: cx, y: cy }, size, i);
-          pts.push(Math.round(c.x), Math.round(c.y));
-        }
-        return pts;
-      };
-      const seaEdges = (hex: (typeof hexes)[number]) =>
-        [1, 2].filter((i) => {
-          const n = addAxial(hex, HEX_DIRS[i]!);
-          return !board.hexes[hexId(n.q, n.r)];
-        });
-
-      // shadow on the water
-      for (const hex of hexes) {
-        const p = pointyHexToPixel(hex, HEX_SIZE);
-        g.poly(poly(p.x + 5, p.y + CLIFF_DEPTH + 6, HEX_SIZE + 2));
-        g.fill({ color: 0x0b3046 });
-      }
-      // surf along the cliff foot
-      for (const hex of hexes) {
-        const p = pointyHexToPixel(hex, HEX_SIZE);
-        for (const i of seaEdges(hex)) {
-          const a = hexCorner(p, HEX_SIZE, i);
-          const b = hexCorner(p, HEX_SIZE, i + 1);
-          g.moveTo(a.x, a.y + CLIFF_DEPTH + 2);
-          g.lineTo(b.x, b.y + CLIFF_DEPTH + 2);
-          g.stroke({ width: 3, color: 0x8fd0de, alpha: 0.75 });
-        }
-      }
-      CLIFF_BANDS.forEach((band, bi) => {
-        for (const hex of hexes) {
-          const p = pointyHexToPixel(hex, HEX_SIZE);
-          g.poly(poly(p.x, p.y + band.at, HEX_SIZE + 0.6));
-          g.fill({ color: band.color });
-        }
-        const next = CLIFF_BANDS[bi + 1]?.at ?? 0;
-        for (const hex of hexes) {
-          const p = pointyHexToPixel(hex, HEX_SIZE);
-          for (const i of seaEdges(hex)) {
-            const a = hexCorner(p, HEX_SIZE, i);
-            const b = hexCorner(p, HEX_SIZE, i + 1);
-            // seam at the top of the band
-            g.moveTo(a.x, a.y + next + 1);
-            g.lineTo(b.x, b.y + next + 1);
-            g.stroke({ width: 1, color: band.seam });
-            // pebbles and roots
-            for (let k = 0; k < 7; k++) {
-              const seed = hex.q * 31 + hex.r * 57 + i * 7 + bi * 13 + k;
-              const t = seeded(seed);
-              const d = next + 2 + seeded(seed + 0.5) * (band.at - next - 2);
-              g.rect(Math.round(a.x + (b.x - a.x) * t), Math.round(a.y + (b.y - a.y) * t + d), 2, 1);
-              g.fill({ color: seeded(seed + 0.25) > 0.5 ? band.seam : shade(band.color, -0.35) });
-            }
-          }
-        }
-      });
-      // grass lip in each tile's own color
-      for (const hex of hexes) {
-        const p = pointyHexToPixel(hex, HEX_SIZE);
-        g.poly(poly(p.x, p.y + 2, HEX_SIZE + 0.6));
-        g.fill({ color: shade(TERRAIN_COLOR[hex.terrain] ?? 0x3d6630, -0.45) });
-      }
-    },
-    [board],
-  );
-  return <pixiGraphics draw={draw} eventMode="none" />;
-});
-
-function CoastFoam({ board }: { board: Board }) {
-  const draw = useCallback(
-    (g: PixiGraphics) => {
-      g.clear();
-      const land = board.hexes;
-      for (const hex of Object.values(land)) {
-        const c = pointyHexToPixel(hex, HEX_SIZE);
-        for (const i of [0, 3, 4, 5]) {
-          const n = addAxial(hex, HEX_DIRS[i]!);
-          if (land[hexId(n.q, n.r)]) continue;
-          const a = hexCorner(c, HEX_SIZE, i);
-          const b = hexCorner(c, HEX_SIZE, (i + 1) % 6);
-          const mx = (a.x + b.x) / 2;
-          const my = (a.y + b.y) / 2;
-          const len = Math.hypot(mx - c.x, my - c.y) || 1;
-          const nx = (mx - c.x) / len;
-          const ny = (my - c.y) / len;
-          g.moveTo(a.x + nx * 1.5, a.y + ny * 1.5);
-          g.lineTo(b.x + nx * 1.5, b.y + ny * 1.5);
-          g.stroke({ width: 2.5, color: 0x9ad1e5, alpha: 0.7 });
-          g.moveTo(a.x + nx * 3.5, a.y + ny * 3.5);
-          g.lineTo(b.x + nx * 3.5, b.y + ny * 3.5);
-          g.stroke({ width: 1.5, color: 0xf4e8c8, alpha: 0.35 });
-        }
-      }
-    },
-    [board],
-  );
-  return <pixiGraphics draw={draw} eventMode="none" />;
 }
 
 function VertexPad() {
@@ -1305,31 +1188,6 @@ function DustPuff({ step }: { step: number }) {
   return <pixiGraphics draw={draw} eventMode="none" />;
 }
 
-function FallbackHex({ terrain }: { terrain: string }) {
-  const draw = useCallback(
-    (g: PixiGraphics) => {
-      g.clear();
-      const pts: number[] = [];
-      for (let i = 0; i < 6; i++) {
-        const c = hexCorner({ x: 0, y: 0 }, HEX_SIZE - 1, i);
-        pts.push(Math.round(c.x), Math.round(c.y));
-      }
-      const colors: Record<string, number> = {
-        wood: 0x2f6b32,
-        brick: 0xb24a32,
-        sheep: 0x6db35c,
-        wheat: 0xe0b33a,
-        ore: 0x5c6573,
-        desert: 0xc2a366,
-      };
-      g.poly(pts);
-      g.fill({ color: colors[terrain] ?? 0x444444 });
-    },
-    [terrain],
-  );
-  return <pixiGraphics draw={draw} />;
-}
-
 function NumberToken({
   x,
   y,
@@ -1396,28 +1254,19 @@ function FallbackToken() {
 const IslandPicture = memo(function IslandPicture({
   board,
   textures,
+  art,
   origin,
 }: {
   board: Board;
   textures: Record<string, Texture> | null;
+  art: IslandTexture;
   origin: { x: number; y: number };
 }) {
   const land = Object.values(board.hexes).sort((a, b) => b.r - a.r || b.q - a.q);
   return (
     <pixiContainer>
       <SeaWater texture={textures?.["/sprites/sea-tile.png"]} />
-      <IslandCliff board={board} />
-      {land.map((hex) => {
-        const p = pointyHexToPixel(hex, HEX_SIZE);
-        const url = TERRAIN_SPRITE[hex.terrain];
-        const tex = url ? textures?.[url] : undefined;
-        return (
-          <pixiContainer key={hex.id} x={p.x} y={p.y} eventMode="none">
-            {tex ? <pixiSprite texture={tex} anchor={HEX_SPRITE_ANCHOR} eventMode="none" /> : <FallbackHex terrain={hex.terrain} />}
-          </pixiContainer>
-        );
-      })}
-      <CoastFoam board={board} />
+      <pixiSprite texture={art.texture} x={art.x} y={art.y} scale={1 / art.scale} eventMode="none" />
       {land.map((hex) => {
         if (hex.number === null) return null;
         const p = pointyHexToPixel(hex, HEX_SIZE);

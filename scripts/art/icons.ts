@@ -2,8 +2,8 @@
  * Resource icons (16x16, drawn at native size so the HUD shows them crisp)
  * and the resource cards built from them.
  */
+import { P } from "./icon-palette.ts";
 import { Raster, hex, mix, noise, ramp, type RGB } from "./raster.ts";
-import { P } from "./terrain.ts";
 
 type Px = Map<string, RGB>;
 

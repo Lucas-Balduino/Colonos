@@ -11,15 +11,6 @@ export const FACTION_ID: Record<string, FactionId> = {
 
 export type FactionId = "red" | "blue" | "orange" | "ivory";
 
-export const TERRAIN_SPRITE: Record<string, string> = {
-  wood: "/sprites/hex-wood.png",
-  brick: "/sprites/hex-brick.png",
-  sheep: "/sprites/hex-sheep.png",
-  wheat: "/sprites/hex-wheat.png",
-  ore: "/sprites/hex-ore.png",
-  desert: "/sprites/hex-desert.png",
-};
-
 export const CHIP_SPRITE: Record<string, string> = {
   wood: "/sprites/chip-wood.png",
   brick: "/sprites/chip-brick.png",
@@ -58,7 +49,6 @@ export function diceSprite(n: number): string {
 }
 
 export const BOARD_URLS = [
-  ...Object.values(TERRAIN_SPRITE),
   "/sprites/sea-tile.png",
   "/sprites/robber-0.png",
   "/sprites/robber-1.png",
