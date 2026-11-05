@@ -1,7 +1,7 @@
 import { legalActions } from "./legal.ts";
 import { countResources } from "./resources.ts";
 import { bestBankRatio } from "./rules.ts";
-import { totalVictoryPoints, visibleVictoryPoints } from "./scoring.ts";
+import { longestRoadLength, totalVictoryPoints, visibleVictoryPoints } from "./scoring.ts";
 import {
   RESOURCES,
   type GameEvent,
@@ -42,6 +42,7 @@ export function projectStateFor(state: GameState, viewerId: PlayerId | null): Pu
         settlementCount: p.settlements.length,
         cityCount: p.cities.length,
         roadCount: p.roads.length,
+        roadLength: longestRoadLength(state.board, p, state.players),
         devCount: p.devCards.length,
         knightsPlayed: p.knightsPlayed,
         publicVp: visibleVictoryPoints(p, state.longestRoadPlayerId, state.largestArmyPlayerId),

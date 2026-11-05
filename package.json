@@ -16,7 +16,7 @@
     "test:watch": "vitest",
     "start": "tsx src/server/index.ts --prod",
     "sim": "tsx scripts/sim.ts",
-    "sprites": "node scripts/generate-sprites.mjs && node scripts/process-art.mjs"
+    "art": "tsx scripts/art.ts"
   },
   "dependencies": {
     "@pixi/react": "^8.0.5",

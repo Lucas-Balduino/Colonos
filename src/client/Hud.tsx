@@ -152,7 +152,7 @@ function DicePair({ dice }: { dice: [number, number] | null }) {
 
 function PlayerList({ view }: { view: PublicView }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-2">
       {view.players.map((p) => (
         <PlayerRow
           key={p.id}
@@ -202,9 +202,15 @@ function PlayerRow({
           {presence === "autopilot" ? <span className="text-[10px] text-[#e0b33a]">bot no lugar</span> : null}
           {current ? <span className="gold-ribbon px-1 text-[9px] leading-tight">VEZ</span> : null}
         </p>
-        <p className="text-muted-foreground text-[11px] leading-tight">
-          {player.resourceCount} {player.resourceCount === 1 ? "carta" : "cartas"} · {player.devCount} desenv. ·{" "}
-          {player.knightsPlayed} cav.
+        <p className="text-muted-foreground flex flex-wrap gap-x-2 text-[11px] leading-tight">
+          <span>
+            {player.resourceCount} {player.resourceCount === 1 ? "carta" : "cartas"}
+          </span>
+          <span>{player.devCount} desenv.</span>
+          <span className={army ? "text-[#e0b33a]" : undefined}>{player.knightsPlayed} cav.</span>
+          <span className={longest ? "text-[#e0b33a]" : undefined} title="Estrada contínua mais longa. Com 5 ou mais, vale a maior estrada.">
+            estrada {player.roadLength}
+          </span>
         </p>
         {longest || army ? (
           <p className="text-[10px] leading-tight text-[#e0b33a]">
@@ -235,7 +241,7 @@ function HandPanel({
 }) {
   const total = countResources(hand);
   return (
-    <div className="wood-panel p-2">
+    <div className="wood-panel grass-lip p-2 pt-3">
       <p className="mb-1.5 flex justify-between text-xs">
         <span>Sua mão</span>
         <span className={total > 7 ? "text-[#e05a4a]" : "text-muted-foreground"}>
@@ -257,12 +263,14 @@ function HandPanel({
               type="button"
               disabled={!discard}
               onClick={() => onTap(r)}
-              className={`resource-card min-w-0 !px-0.5 ${n === 0 ? "opacity-45" : ""} ${picked ? "resource-card-on" : ""} ${discard ? "cursor-pointer" : "cursor-default"}`}
+              className={`hand-card ${n === 0 ? "opacity-40" : ""} ${picked ? "hand-card-on" : ""} ${discard ? "cursor-pointer" : "cursor-default"}`}
               aria-label={`${n} ${RESOURCE_LABEL[r]}`}
             >
-              <img src={CARD_SPRITE[r]} alt="" className="pixelated h-12 w-auto" />
-              <span className="resource-seal !top-0.5 !bottom-auto">{n}</span>
-              <span className="mt-0.5 text-[9px] leading-none uppercase">{RESOURCE_LABEL[r]}</span>
+              <span className="relative">
+                <img src={CARD_SPRITE[r]} alt="" className="pixelated h-[68px] w-12" />
+                <span className="resource-seal">{n}</span>
+              </span>
+              <span className="mt-1 text-[9px] leading-none uppercase">{RESOURCE_LABEL[r]}</span>
               {port ? <span className="mt-0.5 bg-[#16344a] px-1 text-[9px] text-[#9ad1e5]">porto {port}:1</span> : null}
               {picked ? <span className="absolute inset-x-0 top-6 text-center text-sm font-bold text-[#c44536]">-{picked}</span> : null}
             </button>
@@ -307,7 +315,7 @@ function DevCards({
     groups.set(c.type, g);
   }
   return (
-    <div className="wood-panel p-2">
+    <div className="wood-panel grass-lip p-2 pt-3">
       <p className="mb-1.5 text-xs">Cartas de desenvolvimento</p>
       <div className="flex flex-col gap-1">
         {[...groups.entries()].map(([type, g]) => {
@@ -330,7 +338,7 @@ function DevCards({
               className={`pixel-btn flex items-center gap-2 px-2 py-1 text-left ${can ? "bg-primary text-primary-foreground" : "bg-secondary"}`}
               title={DEV_INFO[type].hint}
             >
-              <img src={CARD_SPRITE[type]} alt="" className="pixelated h-8 w-auto" />
+              <img src={CARD_SPRITE[type]} alt="" className="pixelated h-[34px] w-6" />
               <span className="min-w-0 flex-1">
                 <span className="block text-xs leading-tight">
                   {DEV_INFO[type].name}
@@ -358,7 +366,7 @@ export function BuildPanel({
   onBuy?: (action: Action) => void;
 }) {
   return (
-    <div className="wood-panel p-2">
+    <div className="wood-panel grass-lip p-2 pt-3">
       <p className="mb-1.5 text-xs">Construir</p>
       <div className="grid grid-cols-2 gap-1">
         <BuildChoice
@@ -453,7 +461,7 @@ export function ResourceStrip({
     <div className="flex shrink-0 gap-0.5">
       {RESOURCES.map((r) => (
         <span key={r} className="grid w-7 place-items-center leading-none">
-          <img src={CHIP_SPRITE[r]} alt={RESOURCE_LABEL[r]} className="pixelated size-5" />
+          <img src={CHIP_SPRITE[r]} alt={RESOURCE_LABEL[r]} className="pixelated size-4" />
           <span className="text-[11px]">{shown[r]}</span>
         </span>
       ))}
@@ -882,7 +890,7 @@ function PickChip({
       onClick={onClick}
       className={`pixel-btn flex flex-col items-center py-1 ${selected ? "bg-primary text-primary-foreground" : "bg-secondary"} ${disabled ? "opacity-35" : ""}`}
     >
-      <img src={CHIP_SPRITE[resource]} alt={RESOURCE_LABEL[resource]} className="pixelated size-6" />
+      <img src={CHIP_SPRITE[resource]} alt={RESOURCE_LABEL[resource]} className="pixelated size-8" />
       <span className="text-[9px] leading-tight">{RESOURCE_LABEL[resource]}</span>
       {caption ? <span className="text-[9px] leading-tight opacity-75">{caption}</span> : null}
     </button>
@@ -908,7 +916,7 @@ function Stepper({
           const max = cap ? cap[r] : 6;
           return (
             <div key={r} className="flex flex-col items-center gap-0.5 bg-[#2a1c16] py-1">
-              <img src={CHIP_SPRITE[r]} alt="" className="pixelated size-6" />
+              <img src={CHIP_SPRITE[r]} alt="" className="pixelated size-8" />
               <span className="text-[9px] leading-tight">{RESOURCE_LABEL[r]}</span>
               <span className="text-base leading-tight tabular-nums">{value[r]}</span>
               <span className="flex gap-0.5">
@@ -979,7 +987,7 @@ function PlentyDialog({
               className="resource-card h-20 w-14 justify-center"
               onClick={() => setSlots((prev) => prev.map((s, j) => (j === i ? null : s)))}
             >
-              {slot ? <img src={CARD_SPRITE[slot]} alt={RESOURCE_LABEL[slot]} className="pixelated h-14" /> : "?"}
+              {slot ? <img src={CARD_SPRITE[slot]} alt={RESOURCE_LABEL[slot]} className="pixelated h-[68px] w-12" /> : "?"}
             </button>
           ))}
         </div>

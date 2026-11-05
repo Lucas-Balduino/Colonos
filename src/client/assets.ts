@@ -59,7 +59,7 @@ export function diceSprite(n: number): string {
 
 export const BOARD_URLS = [
   ...Object.values(TERRAIN_SPRITE),
-  "/sprites/hex-sea.png",
+  "/sprites/sea-tile.png",
   "/sprites/robber-0.png",
   "/sprites/robber-1.png",
   "/sprites/token.png",

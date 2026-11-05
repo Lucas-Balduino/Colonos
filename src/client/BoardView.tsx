@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Application, extend } from "@pixi/react";
 import { LocateFixed, Minus, Plus } from "lucide-react";
-import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
+import { Container, Graphics, Sprite, Text, Texture, TilingSprite } from "pixi.js";
 import type { Graphics as PixiGraphics } from "pixi.js";
 import { toast } from "sonner";
 import { addAxial, cubeDistance, HEX_DIRS, hexCorner, hexId, parseHexId, pointyHexToPixel } from "../core/hex.ts";
@@ -17,14 +17,14 @@ import {
   TERRAIN_SPRITE,
 } from "./assets.ts";
 import { sfx } from "./audio.ts";
-import { FACTION_HEX, PALETTE, shade } from "./theme.ts";
+import { FACTION_HEX, PALETTE, shade, TERRAIN_COLOR } from "./theme.ts";
 import { AnimClockProvider, animFrameNow, useAnimFrame } from "./anim-clock.tsx";
 import { buildModeCopy, phaseCopy, type BuildMode } from "./copy.ts";
 import { preloadSprites } from "./preload.ts";
 import { FxLayer } from "./fx/FxLayer.tsx";
 import { holdFx, motionMs, type EventBatch } from "./fx/batch.ts";
 
-extend({ Container, Graphics, Sprite, Text });
+extend({ Container, Graphics, Sprite, Text, TilingSprite });
 
 declare global {
   interface Window {
@@ -102,18 +102,6 @@ function portAnchor(board: Board, origin: { x: number; y: number }, edgeId: stri
   const my = (a.y + b.y) / 2;
   const outward = Math.hypot(mx - origin.x, my - origin.y) || 1;
   return { x: mx + ((mx - origin.x) / outward) * 22, y: my + ((my - origin.y) / outward) * 18 };
-}
-
-function seaRing(): { q: number; r: number }[] {
-  const out: { q: number; r: number }[] = [];
-  // Enough rings that the water reaches past the screen edge at any zoom.
-  for (let q = -9; q <= 9; q++) {
-    for (let r = -9; r <= 9; r++) {
-      const d = cubeDistance({ q, r });
-      if (d >= 3 && d <= 9) out.push({ q, r });
-    }
-  }
-  return out.sort((a, b) => b.r - a.r || b.q - a.q);
 }
 
 function cubeLerp(a: { q: number; r: number }, b: { q: number; r: number }, t: number) {
@@ -612,10 +600,19 @@ export function BoardView({
     setNivel(next);
   };
 
-  const onWheel = (e: React.WheelEvent) => {
+  // React registers wheel listeners as passive, so preventDefault needs a native one.
+  const wheelRef = useRef<(e: WheelEvent) => void>(() => {});
+  wheelRef.current = (e: WheelEvent) => {
     e.preventDefault();
     stepNivel(e.deltaY < 0 ? 1 : -1, { x: e.clientX, y: e.clientY });
   };
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => wheelRef.current(e);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
@@ -733,7 +730,6 @@ export function BoardView({
       ref={host}
       className="board-felt relative h-full min-h-[420px] w-full touch-none overflow-hidden"
       style={{ cursor: canClick ? "pointer" : "grab" }}
-      onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -747,7 +743,7 @@ export function BoardView({
         onClearBuild?.();
       }}
     >
-      <Application resizeTo={host} background={0x0b4d66} antialias={false} roundPixels preference="webgl">
+      <Application resizeTo={host} background={0x134b6a} antialias={false} roundPixels preference="webgl">
         <AnimClockProvider>
         <pixiContainer x={size.w / 2 + pan.x + nudge} y={size.h / 2 + pan.y} scale={zoom}>
           <pixiContainer x={-origin.x} y={-origin.y}>
@@ -800,6 +796,7 @@ export function BoardView({
               const tex = textures?.[url];
               const piece = (
                 <pixiContainer scale={0.82} eventMode="none">
+                  {v.building ? <LanternGlow seed={p.x * 7 + p.y * 13} big={v.building.type === "city"} /> : null}
                   {ghost || v.building ? <VertexPad /> : null}
                   {(ghost || cityPick) && !hovered ? <SurveyStakes color={color} /> : null}
                   {((ghost && hovered) || (v.building && !previewCity) || previewCity) && tex ? (
@@ -838,6 +835,7 @@ export function BoardView({
               hopping={robberPos !== view.board.robberHexId}
             />
             <FxLayer batch={events} board={view.board} textures={textures} players={view.players} />
+            <Gulls />
             {pendingRobberHex && view.board.hexes[pendingRobberHex] ? (
               <RobberSprite
                 x={pointyHexToPixel(view.board.hexes[pendingRobberHex], HEX_SIZE).x}
@@ -982,25 +980,117 @@ function TableLoading({ progress }: { progress: number }) {
   );
 }
 
-function IslandBase({ board }: { board: Board }) {
+/** Water under the whole table, drifting a pixel at a time. */
+function SeaWater({ texture }: { texture?: Texture }) {
+  const frame = useAnimFrame();
+  if (!texture) return null;
+  const drift = Math.floor(frame / 3);
+  return (
+    <pixiContainer eventMode="none">
+      <pixiTilingSprite texture={texture} x={-2000} y={-2000} width={4000} height={4000} tilePosition={{ x: drift, y: 0 }} />
+      <pixiTilingSprite
+        texture={texture}
+        x={-2000}
+        y={-2000}
+        width={4000}
+        height={4000}
+        tileScale={{ x: 2, y: 2 }}
+        tilePosition={{ x: -Math.floor(frame / 5) * 2, y: 16 }}
+        alpha={0.22}
+      />
+    </pixiContainer>
+  );
+}
+
+/** How far the island's earth shows below the land, like a diorama. */
+const CLIFF_DEPTH = 16;
+const CLIFF_BANDS: Array<{ at: number; color: number; seam: number }> = [
+  { at: 16, color: 0x2e2a33, seam: 0x4a4552 },
+  { at: 12, color: 0x463f45, seam: 0x625a5e },
+  { at: 8, color: 0x5a3a22, seam: 0x7a5232 },
+  { at: 4, color: 0x76512e, seam: 0x97703f },
+];
+
+function seeded(n: number): number {
+  const x = Math.sin(n * 127.1) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/** Earth strata under the coast, the island's shadow, and surf at its foot. */
+const IslandCliff = memo(function IslandCliff({ board }: { board: Board }) {
   const draw = useCallback(
     (g: PixiGraphics) => {
       g.clear();
-      for (const hex of Object.values(board.hexes)) {
-        const p = pointyHexToPixel(hex, HEX_SIZE);
+      const hexes = Object.values(board.hexes);
+      const poly = (cx: number, cy: number, size: number) => {
         const pts: number[] = [];
         for (let i = 0; i < 6; i++) {
-          const c = hexCorner({ x: p.x, y: p.y + 4 }, HEX_SIZE + 3, i);
-          pts.push(c.x, c.y);
+          const c = hexCorner({ x: cx, y: cy }, size, i);
+          pts.push(Math.round(c.x), Math.round(c.y));
         }
-        g.poly(pts);
-        g.fill({ color: 0x071018, alpha: 0.4 });
+        return pts;
+      };
+      const seaEdges = (hex: (typeof hexes)[number]) =>
+        [1, 2].filter((i) => {
+          const n = addAxial(hex, HEX_DIRS[i]!);
+          return !board.hexes[hexId(n.q, n.r)];
+        });
+
+      // shadow on the water
+      for (const hex of hexes) {
+        const p = pointyHexToPixel(hex, HEX_SIZE);
+        g.poly(poly(p.x + 5, p.y + CLIFF_DEPTH + 6, HEX_SIZE + 2));
+        g.fill({ color: 0x0b3046 });
+      }
+      // surf along the cliff foot
+      for (const hex of hexes) {
+        const p = pointyHexToPixel(hex, HEX_SIZE);
+        for (const i of seaEdges(hex)) {
+          const a = hexCorner(p, HEX_SIZE, i);
+          const b = hexCorner(p, HEX_SIZE, i + 1);
+          g.moveTo(a.x, a.y + CLIFF_DEPTH + 2);
+          g.lineTo(b.x, b.y + CLIFF_DEPTH + 2);
+          g.stroke({ width: 3, color: 0x8fd0de, alpha: 0.75 });
+        }
+      }
+      CLIFF_BANDS.forEach((band, bi) => {
+        for (const hex of hexes) {
+          const p = pointyHexToPixel(hex, HEX_SIZE);
+          g.poly(poly(p.x, p.y + band.at, HEX_SIZE + 0.6));
+          g.fill({ color: band.color });
+        }
+        const next = CLIFF_BANDS[bi + 1]?.at ?? 0;
+        for (const hex of hexes) {
+          const p = pointyHexToPixel(hex, HEX_SIZE);
+          for (const i of seaEdges(hex)) {
+            const a = hexCorner(p, HEX_SIZE, i);
+            const b = hexCorner(p, HEX_SIZE, i + 1);
+            // seam at the top of the band
+            g.moveTo(a.x, a.y + next + 1);
+            g.lineTo(b.x, b.y + next + 1);
+            g.stroke({ width: 1, color: band.seam });
+            // pebbles and roots
+            for (let k = 0; k < 7; k++) {
+              const seed = hex.q * 31 + hex.r * 57 + i * 7 + bi * 13 + k;
+              const t = seeded(seed);
+              const d = next + 2 + seeded(seed + 0.5) * (band.at - next - 2);
+              g.rect(Math.round(a.x + (b.x - a.x) * t), Math.round(a.y + (b.y - a.y) * t + d), 2, 1);
+              g.fill({ color: seeded(seed + 0.25) > 0.5 ? band.seam : shade(band.color, -0.35) });
+            }
+          }
+        }
+      });
+      // grass lip in each tile's own color
+      for (const hex of hexes) {
+        const p = pointyHexToPixel(hex, HEX_SIZE);
+        g.poly(poly(p.x, p.y + 2, HEX_SIZE + 0.6));
+        g.fill({ color: shade(TERRAIN_COLOR[hex.terrain] ?? 0x3d6630, -0.45) });
       }
     },
     [board],
   );
   return <pixiGraphics draw={draw} eventMode="none" />;
-}
+});
 
 function CoastFoam({ board }: { board: Board }) {
   const draw = useCallback(
@@ -1009,7 +1099,7 @@ function CoastFoam({ board }: { board: Board }) {
       const land = board.hexes;
       for (const hex of Object.values(land)) {
         const c = pointyHexToPixel(hex, HEX_SIZE);
-        for (let i = 0; i < 6; i++) {
+        for (const i of [0, 3, 4, 5]) {
           const n = addAxial(hex, HEX_DIRS[i]!);
           if (land[hexId(n.q, n.r)]) continue;
           const a = hexCorner(c, HEX_SIZE, i);
@@ -1315,21 +1405,8 @@ const IslandPicture = memo(function IslandPicture({
   const land = Object.values(board.hexes).sort((a, b) => b.r - a.r || b.q - a.q);
   return (
     <pixiContainer>
-      {seaRing().map((h) => {
-        const p = pointyHexToPixel(h, HEX_SIZE);
-        const tex = textures?.["/sprites/hex-sea.png"];
-        return tex ? (
-          <pixiSprite
-            key={`sea-${h.q},${h.r}`}
-            texture={tex}
-            x={p.x}
-            y={p.y}
-            anchor={HEX_SPRITE_ANCHOR}
-            eventMode="none"
-          />
-        ) : null;
-      })}
-      <IslandBase board={board} />
+      <SeaWater texture={textures?.["/sprites/sea-tile.png"]} />
+      <IslandCliff board={board} />
       {land.map((hex) => {
         const p = pointyHexToPixel(hex, HEX_SIZE);
         const url = TERRAIN_SPRITE[hex.terrain];
@@ -1365,9 +1442,10 @@ const IslandPicture = memo(function IslandPicture({
           <pixiContainer key={port.edgeId}>
             <PortPiers from={anchor} to={ends} />
             <pixiContainer x={anchor.x} y={anchor.y}>
+              <LanternGlow seed={anchor.x * 3 + anchor.y} />
               {tex ? <pixiSprite texture={tex} anchor={0.5} scale={0.8} eventMode="none" /> : null}
               <PortPlaque specific={specific} />
-              {chip ? <pixiSprite texture={chip} x={-8} y={15} anchor={0.5} scale={0.62} eventMode="none" /> : null}
+              {chip ? <pixiSprite texture={chip} x={-8} y={15} anchor={0.5} eventMode="none" /> : null}
               <pixiText
                 text={port.ratio === 3 ? "3:1" : "2:1"}
                 x={specific ? 6 : 0}
@@ -1449,6 +1527,54 @@ function SurveyStakes({ color }: { color: string }) {
       g.fill({ color: mark });
     },
     [color, pulse],
+  );
+  return <pixiGraphics draw={draw} eventMode="none" />;
+}
+
+/** Warm light around houses and docks; each one flickers on its own beat. */
+function LanternGlow({ seed, big = false }: { seed: number; big?: boolean }) {
+  const frame = useAnimFrame();
+  const beat = Math.floor(frame / 2) + Math.floor(Math.abs(seed));
+  const flicker = ((beat * 2654435761) >>> 0) % 7 === 0 ? 1 : 0;
+  const draw = useCallback(
+    (g: PixiGraphics) => {
+      const r = big ? 20 : 15;
+      g.clear();
+      g.circle(0, -6, r + 2 - flicker * 2);
+      g.fill({ color: 0xffb347, alpha: 0.07 });
+      g.circle(0, -6, r * 0.6 - flicker);
+      g.fill({ color: 0xffc870, alpha: 0.09 });
+    },
+    [big, flicker],
+  );
+  return <pixiGraphics draw={draw} blendMode="add" eventMode="none" />;
+}
+
+/** A few gulls crossing the sea, flapping every few frames. */
+function Gulls() {
+  const frame = useAnimFrame();
+  const draw = useCallback(
+    (g: PixiGraphics) => {
+      g.clear();
+      const span = 900;
+      for (let i = 0; i < 3; i++) {
+        const t = (frame * (0.9 + i * 0.35) + i * 300) % span;
+        const x = Math.round(-450 + t);
+        const y = Math.round(-260 + i * 210 + Math.sin((frame + i * 40) / 18) * 6);
+        const up = (Math.floor(frame / 3) + i) % 2 === 0;
+        // shadow on the water, then the bird
+        g.rect(x + 6, y + 22, 5, 1);
+        g.fill({ color: 0x0b3046, alpha: 0.5 });
+        g.rect(x, y, 2, 1);
+        g.rect(x + 4, y, 2, 1);
+        g.rect(x + 2, y + 1, 2, 1);
+        g.fill({ color: 0xf4f0e4 });
+        g.rect(x + (up ? 0 : -1), y - (up ? 1 : -1), 1, 1);
+        g.rect(x + (up ? 5 : 6), y - (up ? 1 : -1), 1, 1);
+        g.fill({ color: 0xc2bcae });
+      }
+    },
+    [frame],
   );
   return <pixiGraphics draw={draw} eventMode="none" />;
 }

@@ -208,6 +208,8 @@ export interface PublicPlayerView {
   settlementCount: number;
   cityCount: number;
   roadCount: number;
+  /** Longest continuous road; 5 or more can take the +2 card. */
+  roadLength: number;
   devCount: number;
   knightsPlayed: number;
   publicVp: number;

@@ -210,7 +210,6 @@ function FlyingChip({
       texture={texture}
       x={Math.round(x)}
       y={Math.round(y)}
-      scale={0.5}
       anchor={0.5}
       eventMode="none"
     />
