@@ -1,5 +1,5 @@
 import { Assets, Texture } from "pixi.js";
-import { ALL_SPRITE_URLS } from "./assets.ts";
+import { ALL_SPRITE_URLS, HI_DENSITY_URLS } from "./assets.ts";
 
 let cache: Record<string, Texture> | null = null;
 let inflight: Promise<Record<string, Texture>> | null = null;
@@ -20,7 +20,12 @@ export function preloadSprites(onProgress?: (p: number) => void): Promise<Record
         ALL_SPRITE_URLS.map(async (url) => {
           try {
             const tex = (await Assets.load(url)) as Texture;
-            tex.source.scaleMode = "nearest";
+            if (HI_DENSITY_URLS.includes(url)) {
+              // shown at about half size: smooth minification, crisp when zoomed in
+              tex.source.scaleMode = "linear";
+              tex.source.autoGenerateMipmaps = true;
+              tex.source.updateMipmaps();
+            } else tex.source.scaleMode = "nearest";
             next[url] = tex;
           } catch {
             /* optional slice missing */

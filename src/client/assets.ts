@@ -71,3 +71,6 @@ export const HUD_URLS = [
 ];
 
 export const ALL_SPRITE_URLS = [...new Set([...BOARD_URLS, ...HUD_URLS])];
+
+/** Sprites drawn at 2 texels per world pixel, like the island. */
+export const HI_DENSITY_URLS = BOARD_URLS.filter((url) => /settlement-|city-|robber-|token|port-/.test(url));

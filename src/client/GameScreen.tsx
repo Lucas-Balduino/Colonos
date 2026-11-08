@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { startAmbience, stopAmbience } from "./audio.ts";
 import { BoardView } from "./BoardView.tsx";
 import type { BuildMode } from "./copy.ts";
 import { GameOver } from "./GameOver.tsx";
@@ -80,6 +81,11 @@ export function TableLayout({
   useEffect(() => {
     setBuildMode(null);
   }, [view.phase]);
+
+  useEffect(() => {
+    startAmbience();
+    return () => stopAmbience(true);
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

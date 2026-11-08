@@ -190,7 +190,7 @@ function PlayerRow({
       style={{ borderColor: current || winner ? "#d4a017" : player.color }}
     >
       <span className="grid size-8 shrink-0 place-items-center" style={{ background: `${player.color}33` }}>
-        <img src={settlementSprite(player.color)} alt="" className="pixelated size-7" />
+        <img src={settlementSprite(player.color)} alt="" className="size-7 object-contain" />
       </span>
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1.5 text-sm leading-tight">

@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Application, extend } from "@pixi/react";
-import { LocateFixed, Minus, Plus } from "lucide-react";
+import { LocateFixed, Minus, Plus, Volume2, VolumeX } from "lucide-react";
 import { Container, Graphics, Sprite, Text, Texture, TilingSprite } from "pixi.js";
 import type { Graphics as PixiGraphics } from "pixi.js";
 import { toast } from "sonner";
@@ -9,12 +9,13 @@ import { RESOURCE_LABEL } from "../core/resources.ts";
 import type { Action, Board, HexId, PublicView } from "../core/types.ts";
 import {
   BOARD_URLS,
+  HI_DENSITY_URLS,
   CHIP_SPRITE,
   citySprite,
   HEX_SIZE,
   settlementSprite,
 } from "./assets.ts";
-import { sfx } from "./audio.ts";
+import { isMuted, setMuted, sfx } from "./audio.ts";
 import { FACTION_HEX, PALETTE, shade } from "./theme.ts";
 import { AnimClockProvider, animFrameNow, useAnimFrame } from "./anim-clock.tsx";
 import { buildModeCopy, phaseCopy, type BuildMode } from "./copy.ts";
@@ -216,10 +217,16 @@ export function BoardView({
   const fit = computeFit(size.w, size.h);
   const zoom = pinchZoom == null ? Math.min(3, fit * nivel) : Math.min(3, Math.max(fit, pinchZoom));
   const island = useIslandArt(view.board);
+  const [muted, setMutedView] = useState(isMuted);
   // the island has 2 texels per world pixel: crisp pixels once they are big enough
   useEffect(() => {
-    if (island) island.texture.source.scaleMode = zoom / island.scale >= 1 ? "nearest" : "linear";
-  }, [island, zoom]);
+    const mode = zoom / 2 >= 1 ? "nearest" : "linear";
+    if (island) island.texture.source.scaleMode = mode;
+    for (const url of HI_DENSITY_URLS) {
+      const tex = textures?.[url];
+      if (tex) tex.source.scaleMode = mode;
+    }
+  }, [island, textures, zoom]);
   fitRef.current = fit;
   zoomRef.current = zoom;
   if (import.meta.env.DEV) {
@@ -807,6 +814,7 @@ export function BoardView({
                     <pixiSprite
                       texture={tex}
                       anchor={{ x: 0.5, y: 0.9 }}
+                      scale={kind === "city" ? 0.7 : 0.74}
                       alpha={ghost || previewCity ? 0.65 : 1}
                       eventMode="none"
                     />
@@ -852,7 +860,19 @@ export function BoardView({
         </pixiContainer>
         </AnimClockProvider>
       </Application>
-      <div className="absolute right-3 bottom-3 z-10 flex flex-col gap-1">
+      <div className="absolute right-3 bottom-3 z-10 flex flex-col gap-1.5">
+        <button
+          type="button"
+          aria-label={muted ? "Ligar som" : "Desligar som"}
+          title={muted ? "Ligar som" : "Desligar som"}
+          className="pixel-btn bg-secondary mb-1 grid size-8 place-items-center"
+          onClick={() => {
+            setMuted(!muted);
+            setMutedView(!muted);
+          }}
+        >
+          {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+        </button>
         <button
           type="button"
           aria-label="+"
@@ -963,7 +983,7 @@ function RobberSprite({
   const hop = hopping && frame % 2 === 0 ? 2 : 0;
   const tex = textures?.[`/sprites/robber-${blink}.png`];
   if (!tex) return null;
-  return <pixiSprite texture={tex} x={x} y={y - hop} alpha={alpha} anchor={{ x: 0.5, y: 0.85 }} eventMode="none" />;
+  return <pixiSprite texture={tex} x={x} y={y - hop} alpha={alpha} anchor={{ x: 0.5, y: 0.85 }} scale={0.68} eventMode="none" />;
 }
 
 function TableLoading({ progress }: { progress: number }) {
@@ -1203,7 +1223,7 @@ function NumberToken({
   return (
     <pixiContainer x={x} y={y} eventMode="none">
       {texture ? (
-        <pixiSprite texture={texture} anchor={0.5} scale={0.78} />
+        <pixiSprite texture={texture} anchor={0.5} scale={0.52} />
       ) : (
         <FallbackToken />
       )}
@@ -1292,7 +1312,7 @@ const IslandPicture = memo(function IslandPicture({
             <PortPiers from={anchor} to={ends} />
             <pixiContainer x={anchor.x} y={anchor.y}>
               <LanternGlow seed={anchor.x * 3 + anchor.y} />
-              {tex ? <pixiSprite texture={tex} anchor={0.5} scale={0.8} eventMode="none" /> : null}
+              {tex ? <pixiSprite texture={tex} anchor={0.5} scale={0.45} eventMode="none" /> : null}
               <PortPlaque specific={specific} />
               {chip ? <pixiSprite texture={chip} x={-8} y={15} anchor={0.5} eventMode="none" /> : null}
               <pixiText
