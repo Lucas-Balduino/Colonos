@@ -1,355 +1,473 @@
 /**
- * Player pieces and board furniture, drawn at 2 texels per world pixel like
- * the island. Each piece's base sits at 90% of its height (sprite anchor).
+ * Pieces on the table, made the way the robber was: small volumes painted
+ * large and averaged down (see sculpt.ts). Every piece has two frames, like
+ * the robber, swapped on the same slow beat: windows flicker, smoke drifts,
+ * flags wave, the boat bobs.
  */
 import { P } from "./palette.ts";
-import { Shape } from "./props.ts";
-import { Raster, hash2, hex, mix, noise, ramp, type RGB } from "./raster.ts";
+import { Raster, downsample, grade, hex, mix, noise, type RGB } from "./raster.ts";
+import { Sculpt, decal, lit, planks, plaster, shade, shingles, solid, stones, type Material } from "./sculpt.ts";
 
-/** Five tones from one faction color: deep shadow to sunlit. */
+export type Frame = 0 | 1;
+
+const STONE = ["#26222a", "#3e3840", "#5a5258", "#786e70", "#988c88", "#b8aca2"].map(hex);
+const WOOD = ["#1e140c", "#352216", "#4f341e", "#6c4a2a", "#8a6238", "#a87c48"].map(hex);
+const TIMBER = ["#150e0a", "#24180f", "#382616", "#4c3420"].map(hex);
+const LIME = ["#5a4834", "#80684a", "#a68c64", "#c6ae80", "#dccaa0", "#eee2c0"].map(hex);
+const PARCHMENT = ["#5a4630", "#8a7250", "#b49c74", "#d2bd92", "#e8d9b0", "#f4eacb"].map(hex);
+const CANVAS = ["#4e4434", "#786a52", "#a0927a", "#c2b498", "#dcd0b4"].map(hex);
+const IRON = ["#121216", "#24242a", "#3c3c44"].map(hex);
+const SMOKE = ["#4a4652", "#6c6874", "#908c96", "#b4b0b8", "#d0ccd2"].map(hex);
+const FOAM = ["#2c5468", "#4c7a8a", "#7aa4ae", "#b4d0d2"].map(hex);
+
+type Part = { u0: number; v0: number; u1: number; v1: number; m: Material };
+
+/** Five steps of a player's color, from the shade under a tile to its sunlit edge. */
 export function factionRamp(base: string): RGB[] {
   const c = hex(base);
-  return [mix(c, P.ink, 0.62), mix(c, P.ink, 0.35), c, mix(c, [255, 244, 214], 0.28), mix(c, [255, 248, 228], 0.55)];
+  return [mix(c, P.ink, 0.72), mix(c, P.ink, 0.48), mix(c, P.ink, 0.24), c, mix(c, [255, 236, 200], 0.3)];
 }
 
-const PLASTER = ["#8a7658", "#b09a74", "#d2bd92", "#e8d8b0", "#f6ecd0"].map(hex);
-const TIMBER = ["#2a1a10", "#422a18", "#5e3e22"].map(hex);
-const GLOW = ["#a8401a", "#f0a03a", "#ffd877", "#fff4c8"].map(hex);
-
-function softShadow(r: Raster, cx: number, cy: number, rx: number, ry: number): void {
-  for (let y = Math.floor(cy - ry); y <= cy + ry; y++) {
-    for (let x = Math.floor(cx - rx); x <= cx + rx; x++) {
-      const d = ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2;
-      if (d <= 1 && r.alpha(x, y) === 0) r.set(x, y, [16, 10, 6], d > 0.6 ? 60 : 105);
-    }
-  }
+function seedOf(text: string): number {
+  let h = 7;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619) >>> 0;
+  return h % 100000;
 }
 
-function rect(s: Shape, x0: number, y0: number, x1: number, y1: number, color: (x: number, y: number) => RGB): void {
-  for (let y = Math.floor(y0); y <= y1; y++) for (let x = Math.floor(x0); x <= x1; x++) s.put(x, y, color(x, y));
+/** A lit window: wooden frame, cross bar, and a lamp somewhere inside. */
+function windowLight(w: number, h: number, frame: Frame, seed: number): Material {
+  const f = frame ? 0.78 : 1;
+  return (u, v, _z, px, py) => {
+    const edge = Math.min(u, w - u, v, h - v);
+    if (edge < 0.45) return shade(TIMBER, 0.35, px, py);
+    if (Math.abs(u - w / 2) < 0.22 || Math.abs(v - h * 0.55) < 0.2) return shade(TIMBER, 0.6, px, py);
+    // warmest low in the pane, where the hearth is
+    const heat = (1 - v / h) * 0.6 + 0.4 + (noise(u, v, seed) - 0.5) * 0.3;
+    const c = mix([196, 92, 30], [255, 226, 140], Math.min(1, heat * f));
+    return lit(mix(c, [120, 50, 20], 1 - f));
+  };
 }
 
-function window(s: Shape, x: number, y: number, w: number, h: number): void {
-  rect(s, x - 1, y - 1, x + w, y + h, () => TIMBER[0]!);
-  rect(s, x, y, x + w - 1, y + h - 1, (px, py) => {
-    const d = Math.hypot(px - (x + w / 2), py - (y + h / 2)) / (w * 0.7);
-    return ramp(GLOW, 1 - d, px, py);
+function door(w: number, h: number, seed: number): Material {
+  const boards = planks(WOOD.slice(0, 4), seed, 0.9, true);
+  return (u, v, z, px, py) => {
+    const edge = Math.min(u, w - u, h - v);
+    if (edge < 0.4) return shade(TIMBER, 0.3, px, py);
+    if ((Math.abs(v - h * 0.3) < 0.25 || Math.abs(v - h * 0.75) < 0.25) && u < w * 0.7) return shade(IRON, 0.7, px, py);
+    if (Math.abs(u - w * 0.78) < 0.3 && Math.abs(v - h * 0.5) < 0.3) return shade(IRON, 1, px, py);
+    return boards(u, v, z, px, py);
+  };
+}
+
+function lanternLight(frame: Frame): Material {
+  return (u, v) => {
+    if (v > 0.75 * 2.6 || v < 0.15 * 2.6) return [24, 18, 14];
+    return lit(frame ? [255, 190, 90] : [255, 230, 150 - u * 20]);
+  };
+}
+
+/** Half-timbered wall: posts, beams and a cross brace over plaster. */
+function timbered(len: number, h: number, seed: number, extra: Part[]): Material {
+  const wall = plaster(LIME, seed);
+  const beam = solid(TIMBER, 0.55, seed + 1);
+  const bay = len > 10 ? len / 2 : len;
+  const base: Material = (u, v, z, px, py) => {
+    if (u < 0.75 || u > len - 0.75 || v > h - 0.8 || v < 0.55) return beam(u, v, z, px, py);
+    if (len > 10 && Math.abs(u - len / 2) < 0.4) return beam(u, v, z, px, py);
+    // a brace in the first bay
+    if (u < bay && Math.abs((u - 0.75) / (bay - 1.5) - (v - 0.55) / (h - 1.35)) < 0.07) return beam(u, v, z, px, py);
+    return wall(u, v, z, px, py);
+  };
+  return decal(base, extra);
+}
+
+interface HouseSpec {
+  x: number;
+  y: number;
+  len: number;
+  depth: number;
+  footing: number;
+  wall: number;
+  pitch: number;
+  roof: RGB[];
+  seed: number;
+  /** Openings on the long, sunlit wall. */
+  front: Part[];
+  /** Openings on the gable end. */
+  side: Part[];
+  /** Drawn behind the front slope of the roof (chimneys). */
+  behindRoof?: (s: Sculpt) => void;
+}
+
+/** A cottage with its ridge along x: footing, timbered walls, gable and roof. */
+function house(s: Sculpt, h: HouseSpec): void {
+  const { x, y, len, depth, footing, wall, pitch } = h;
+  const top = footing + wall;
+  s.box([x, y, 0], [len, depth, footing], { left: stones(STONE, h.seed), right: stones(STONE, h.seed + 1) });
+  s.box([x, y, footing], [len, depth, wall], {
+    left: timbered(len, wall, h.seed + 2, h.front),
+    right: timbered(depth, wall, h.seed + 3, h.side),
   });
-  const mx = x + Math.floor(w / 2);
-  const my = y + Math.floor(h / 2);
-  for (let k = y; k < y + h; k++) s.put(mx, k, TIMBER[1]!);
-  for (let k = x; k < x + w; k++) s.put(k, my, TIMBER[1]!);
-  // flower box
-  rect(s, x - 1, y + h, x + w, y + h + 1, () => TIMBER[2]!);
-  for (let k = x; k < x + w; k += 2) s.put(k, y + h - 1 + 0, hash2(k, y, 3) > 0.5 ? hex("#d65a6a") : hex("#f2d24a"));
-}
-
-/**
- * A timber-framed cottage seen from the front and a little to the right:
- * plaster wall, stone footing, shingled roof in the faction color, a gable
- * end on the right.
- */
-function cottage(s: Shape, x0: number, base: number, w: number, wallH: number, roofH: number, roof: RGB[], seed: number): void {
-  const x1 = x0 + w - 1;
-  const wallTop = base - 4 - wallH;
-  // stone footing
-  rect(s, x0, base - 4, x1 + 6, base, (x, y) => {
-    const mortar = (y - base) % 3 === 0 || (x + Math.floor((base - y) / 3) * 3) % 6 === 0;
-    return mortar ? P.stone[1]! : ramp(P.stone, 0.62 - (x - x0) / (w * 3) + (hash2(x >> 1, y, seed) - 0.5) * 0.25, x, y);
+  // gable end, plastered, with a beam across its foot
+  const gable = plaster(LIME, h.seed + 4);
+  const gbeam = solid(TIMBER, 0.5, h.seed + 5);
+  s.face([x + len, y, top], [0, depth, 0], [0, depth / 2, pitch], (u, v, z, px, py) => (z < top + 0.7 ? gbeam(u, v, z, px, py) : gable(u, v, z, px, py)), {
+    tri: true,
   });
-  // front wall
-  rect(s, x0, wallTop, x1, base - 5, (x, y) => ramp(PLASTER, 0.62 + (noise(x / 3, y / 3, seed) - 0.5) * 0.3 - (x - x0) / (w * 4), x, y));
-  for (const bx of [x0, x0 + 1, x1 - 1, x1]) rect(s, bx, wallTop, bx, base - 5, () => TIMBER[1]!);
-  const mid = x0 + Math.floor(w / 2);
-  rect(s, mid, wallTop, mid + 1, base - 5, () => TIMBER[1]!);
-  rect(s, x0, wallTop, x1, wallTop + 1, () => TIMBER[0]!);
-  // cross brace on the left panel
-  for (let k = 0; k < wallH - 2; k++) {
-    const x = x0 + 2 + Math.round((k * (mid - x0 - 3)) / (wallH - 2));
-    if (x < mid - 6 || k > wallH * 0.7) continue;
-    s.put(x, base - 6 - k, TIMBER[2]!);
-  }
-  // side wall (right), receding upward
-  const depth = 6;
-  for (let k = 1; k <= depth; k++) {
-    const lift = Math.round(k * 0.6);
-    rect(s, x1 + k, wallTop - lift, x1 + k, base - 5 - lift, (x, y) => ramp(PLASTER, 0.3 + (noise(x / 3, y / 3, seed) - 0.5) * 0.2, x, y));
-  }
-  // roof front slope with shingle rows
-  const eaveY = wallTop + 1;
-  const ridgeY = eaveY - roofH;
-  for (let y = ridgeY; y <= eaveY; y++) {
-    const t = (y - ridgeY) / roofH;
-    const left = Math.round(x0 - 3 + (1 - t) * 3);
-    const right = Math.round(x1 + 2 - (1 - t) * 1);
-    const row = Math.floor((eaveY - y) / 3);
-    for (let x = left; x <= right; x++) {
-      const seam = (eaveY - y) % 3 === 0;
-      const slit = (x + (row % 2) * 3) % 6 === 0;
-      let tone = 0.75 - t * 0.35 - (x - left) / ((right - left) * 5);
-      if (seam) tone -= 0.3;
-      else if (slit) tone -= 0.18;
-      tone += (hash2(x >> 1, row, seed) - 0.5) * 0.12;
-      s.put(x, y, ramp(roof, tone, x, y));
-    }
-  }
-  // eave shadow line and ridge cap
-  rect(s, x0 - 3, eaveY + 1, x1 + 2, eaveY + 1, () => roof[0]!);
-  rect(s, x0, ridgeY - 1, x1 + 1, ridgeY - 1, () => roof[3]!);
-  // gable end on the right
-  const gx = x1 + 3;
-  for (let k = 0; k <= depth + 2; k++) {
-    const x = gx + k;
-    const top = ridgeY + Math.round((k * roofH) / (depth + 6));
-    const bottom = eaveY - Math.round(k * 0.6);
-    for (let y = top; y <= bottom; y++) s.put(x, y, k === 0 || y === top ? roof[1]! : ramp(PLASTER, 0.22, x, y));
-  }
+  h.behindRoof?.(s);
+  const eave = 0.9;
+  const mid = y + depth / 2;
+  const run = depth / 2 + eave;
+  const drop = (eave * pitch) / (depth / 2);
+  // front slope, from the eave up to the ridge
+  s.face([x - 0.9, y + depth + eave, top - drop], [len + 1.8, 0, 0], [0, -run, pitch + drop], shingles(h.roof, h.seed + 6));
+  // barge boards on the gable end, and the ridge cap
+  const barge = solid(TIMBER, 0.45, h.seed + 7);
+  s.face([x + len + 0.9, y + depth + eave, top - drop], [0, -run, pitch + drop], [0, 0, -0.9], barge);
+  s.face([x + len + 0.9, mid, top + pitch], [0, -run, -(pitch + drop)], [0, 0, -0.9], barge);
+  const cap = h.roof.slice(0, 3);
+  s.box([x - 0.9, mid - 0.45, top + pitch - 0.3], [len + 1.8, 0.9, 0.7], { top: solid(cap, 0.6, h.seed + 8), left: solid(cap, 0.4, h.seed + 8), right: barge });
 }
 
-function door(s: Shape, x: number, base: number, w: number, h: number): void {
-  rect(s, x - 1, base - 4 - h - 1, x + w, base - 5, () => TIMBER[0]!);
-  rect(s, x, base - 4 - h, x + w - 1, base - 5, (px, py) => (px === x + Math.floor(w / 2) ? TIMBER[0]! : ramp(TIMBER, 0.5 + (py % 3 === 0 ? -0.3 : 0), px, py)));
-  s.put(x + w - 2, base - 4 - Math.floor(h / 2), P.gold[4]!);
-  // lantern beside the door
-  rect(s, x + w + 2, base - 4 - h + 1, x + w + 3, base - 4 - h + 3, () => GLOW[2]!);
-  s.put(x + w + 2, base - 4 - h, TIMBER[0]!);
+function chimney(s: Sculpt, x: number, y: number, z0: number, z1: number, seed: number): void {
+  s.box([x, y, z0], [2, 2, z1 - z0], { left: stones(STONE, seed, 1.6), right: stones(STONE, seed + 1, 1.6) });
+  s.box([x - 0.3, y - 0.3, z1], [2.6, 2.6, 0.8], {
+    left: solid(STONE, 0.3, seed),
+    right: solid(STONE, 0.2, seed),
+    top: (u, v, _z, px, py) => (u > 0.7 && u < 1.9 && v > 0.7 && v < 1.9 ? [16, 12, 12] : shade(STONE, 0.55, px, py)),
+  });
 }
 
-export function settlement(color: string): Raster {
-  const W = 64;
-  const H = 76;
-  const base = Math.round(H * 0.9);
-  const r = new Raster(W, H);
+function smoke(s: Sculpt, from: [number, number], frame: Frame, seed: number): void {
+  const puffs = frame
+    ? [
+        [0.8, -3, 1.8],
+        [2.4, -6.4, 2.2],
+        [4.4, -9.8, 1.7],
+      ]
+    : [
+        [0.3, -2.6, 1.7],
+        [1.6, -5.8, 2.3],
+        [3.4, -9.2, 1.9],
+      ];
+  puffs.forEach(([dx, dy, r], i) => {
+    s.blob(from[0] + dx!, from[1] + dy!, r!, (ox, oy, px, py) => {
+      const t = 0.7 - (ox + oy) / (r! * 2.4) + (noise(px / 3, py / 3, seed + i) - 0.5) * 0.3 - i * 0.08;
+      return shade(SMOKE, t, px, py);
+    });
+  });
+}
+
+/** Footprint center sits this many pixels above the bottom of the canvas. */
+const FOOT = 8;
+
+export const PIECE_SIZE = {
+  settlement: { w: 42, h: 56 },
+  city: { w: 54, h: 70 },
+};
+
+/** Anchor (0..1) of each piece's footprint center, for the board. */
+export const PIECE_ANCHOR = {
+  settlement: { x: 0.5, y: (PIECE_SIZE.settlement.h - FOOT) / PIECE_SIZE.settlement.h },
+  city: { x: 0.5, y: (PIECE_SIZE.city.h - FOOT) / PIECE_SIZE.city.h },
+};
+
+function sculptFor(W: number, H: number, cx: number, cy: number): Sculpt {
+  // the footprint's center lands on the anchor
+  return new Sculpt(W, H, W / 2 - (cx - cy), H - FOOT - (cx + cy) / 2);
+}
+
+export function settlement(color: string, frame: Frame = 0): Raster {
+  const { w: W, h: H } = PIECE_SIZE.settlement;
+  const seed = seedOf(color);
+  const s = sculptFor(W, H, 7.5, 5.5);
+  house(s, {
+    x: 0,
+    y: 0,
+    len: 15,
+    depth: 11,
+    footing: 2.4,
+    wall: 8.4,
+    pitch: 7,
+    roof: factionRamp(color),
+    seed,
+    front: [
+      { u0: 2.4, v0: 0, u1: 5.4, v1: 5.6, m: door(3, 5.6, seed) },
+      { u0: 5.9, v0: 3, u1: 6.7, v1: 5.6, m: lanternLight(frame) },
+      { u0: 9, v0: 2, u1: 12.4, v1: 5.6, m: windowLight(3.4, 3.6, frame, seed) },
+    ],
+    side: [{ u0: 3.6, v0: 2.2, u1: 7, v1: 5.6, m: windowLight(3.4, 3.4, frame ? 0 : 1, seed + 1) }],
+    behindRoof: (sc) => chimney(sc, 10, 1.6, 13, 21, seed + 20),
+  });
+  smoke(s, s.at([11, 2.6, 22]), frame, seed);
+  return s.finish(seed);
+}
+
+export function city(color: string, frame: Frame = 0): Raster {
+  const { w: W, h: H } = PIECE_SIZE.city;
+  const seed = seedOf(color) + 31;
   const roof = factionRamp(color);
-  softShadow(r, W / 2 + 4, base, 27, 5);
-  const s = new Shape();
-  cottage(s, 13, base, 32, 16, 16, roof, 7);
-  door(s, 18, base, 7, 11);
-  window(s, 33, base - 17, 6, 6);
-  // chimney with a stone cap
-  rect(s, 36, base - 46, 40, base - 34, (x, y) => ramp(P.stone, 0.55 - (x - 36) * 0.08 + (((y + x) % 4 === 0) ? -0.2 : 0), x, y));
-  rect(s, 35, base - 47, 41, base - 46, () => P.stone[2]!);
-  s.draw(r, P.ink);
-  return r;
-}
-
-export function city(color: string): Raster {
-  const W = 88;
-  const H = 100;
-  const base = Math.round(H * 0.9);
-  const r = new Raster(W, H);
-  const roof = factionRamp(color);
-  softShadow(r, W / 2 + 6, base, 38, 6);
-  const s = new Shape();
-  // stone tower behind, on the left
+  // footprint: the keep at the back right, the hall in front
+  const s = sculptFor(W, H, 8.5, 9);
   const tx = 8;
-  const tw = 20;
-  const towerTop = base - 58;
-  rect(s, tx, towerTop, tx + tw, base, (x, y) => {
-    const row = Math.floor((base - y) / 4);
-    const mortar = (base - y) % 4 === 0 || (x + (row % 2) * 4) % 8 === 0;
-    const lit = 0.7 - (x - tx) / (tw * 1.6);
-    return mortar ? P.stone[1]! : ramp(P.stone, lit + (hash2(x >> 2, row, 5) - 0.5) * 0.2, x, y);
+  const ty = 0;
+  const T = 10;
+  const TH = 24;
+  const slit = windowLight(1.6, 3, frame, seed);
+  const banner: Material = (u, v, _z, px, py) => {
+    // hangs from a rod and ends in a swallowtail
+    if (v > 7.2) return shade(TIMBER, 0.5, px, py);
+    if (v < Math.abs(u - 1.2) * 1.4) return null;
+    const fold = Math.sin(u * 3 + (frame ? 1.4 : 0)) * 0.18;
+    if (Math.abs(v - 4.6) < 0.6 && Math.abs(u - 1.2) < 0.6) return lit(mix(PARCHMENT[4]!, [255, 210, 120], 0.3));
+    return shade(roof, 0.55 + fold + (noise(u, v, seed) - 0.5) * 0.2, px, py);
+  };
+  const keepFront = decal(stones(STONE, seed), [
+    { u0: 5.6, v0: 8.6, u1: 7.2, v1: 11.6, m: slit },
+    { u0: 5.6, v0: 15.6, u1: 7.2, v1: 18.6, m: slit },
+    { u0: 1.2, v0: 10.5, u1: 3.6, v1: 19.2, m: banner },
+  ]);
+  const keepSide = decal(stones(STONE, seed + 1), [
+    { u0: 2.2, v0: 12.6, u1: 3.8, v1: 15.6, m: slit },
+    { u0: 5.4, v0: 10.5, u1: 7.8, v1: 19.2, m: banner },
+  ]);
+  s.box([tx, ty, 0], [T, T, TH], { left: keepFront, right: keepSide });
+  // corbelled parapet
+  s.box([tx - 0.5, ty - 0.5, TH], [T + 1, T + 1, 1.6], { left: stones(STONE.slice(0, 5), seed + 2, 0.8), right: stones(STONE.slice(0, 5), seed + 3, 0.8) });
+  // pointed roof in the player's color
+  const z0 = TH + 1.6;
+  const apex = [tx + T / 2, ty + T / 2, z0 + 11] as const;
+  const b2 = [tx + T + 0.8, ty - 0.8, z0 - 0.4] as const;
+  const b3 = [tx + T + 0.8, ty + T + 0.8, z0 - 0.4] as const;
+  const b4 = [tx - 0.8, ty + T + 0.8, z0 - 0.4] as const;
+  const sub = (a: readonly number[], b: readonly number[]) => [a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!] as const;
+  s.face(b2, sub(b3, b2), sub(apex, b2), shingles(roof, seed + 4, 1.8, 2.2), { tri: true });
+  s.face(b4, sub(b3, b4), sub(apex, b4), shingles(roof, seed + 5, 1.8, 2.2), { tri: true });
+  // pole and flag
+  s.box([apex[0] - 0.3, apex[1] - 0.3, apex[2] - 1], [0.6, 0.6, 7], { left: solid(TIMBER, 0.6, seed), right: solid(TIMBER, 0.3, seed) });
+  const wave = frame ? 1.6 : 0;
+  s.face([apex[0] + 0.3, apex[1] + 0.3, apex[2] + 5.8], [5, 0, 0], [0, 0, -3], (u, v, _z, px, py) => {
+    const sway = Math.sin(u * 1.3 + wave) * 0.45;
+    if (v < sway || v > 3 + sway - u * 0.12 || (u > 4.2 && Math.abs(v - 1.5) < (u - 4.2) * 0.9)) return null;
+    return shade(roof, 0.55 + Math.cos(u * 1.3 + wave) * 0.22 + (noise(u, v, seed) - 0.5) * 0.15, px, py);
   });
-  window(s, tx + 8, towerTop + 10, 4, 7);
-  // crenellations
-  for (let x = tx - 1; x <= tx + tw + 1; x += 4) rect(s, x, towerTop - 4, x + 1, towerTop - 1, () => P.stone[4]!);
-  rect(s, tx - 1, towerTop - 1, tx + tw + 1, towerTop, () => P.stone[2]!);
-  // pointed roof on the tower
-  const peak = towerTop - 22;
-  for (let y = peak; y <= towerTop - 2; y++) {
-    const t = (y - peak) / (towerTop - 2 - peak);
-    const half = Math.round(2 + t * (tw / 2 + 2));
-    const cx = tx + tw / 2;
-    for (let x = Math.floor(cx - half); x <= cx + half; x++) {
-      const lit = x < cx ? 0.75 : 0.35;
-      const seam = (y - peak) % 3 === 0 ? -0.25 : 0;
-      s.put(x, y, ramp(roof, lit + seam - t * 0.15, x, y));
-    }
-  }
-  // flag
-  const pole = tx + tw / 2;
-  rect(s, pole, peak - 12, pole, peak, () => TIMBER[1]!);
-  for (let y = peak - 12; y < peak - 6; y++) {
-    for (let x = pole + 1; x <= pole + 8; x++) {
-      const wave = Math.round(Math.sin((x - pole) * 0.9) * 0.8);
-      if (y + wave < peak - 12 || y + wave >= peak - 6) continue;
-      s.put(x, y + wave, ramp(roof, 0.75 - (x - pole) * 0.04, x, y));
-    }
-  }
-  // main hall in front
-  cottage(s, 26, base, 42, 22, 20, roof, 13);
-  door(s, 31, base, 9, 15);
-  window(s, 47, base - 22, 6, 7);
-  window(s, 57, base - 22, 6, 7);
-  // banner on the hall
-  rect(s, 44, base - 12, 49, base - 5, (x, y) => ramp(roof, 0.65 - (y - base + 12) * 0.04, x, y));
-  s.put(46, base - 10, P.gold[4]!);
-  s.put(47, base - 10, P.gold[4]!);
-  s.draw(r, P.ink);
-  return r;
+
+  house(s, {
+    x: 0,
+    y: 10,
+    len: 14,
+    depth: 8,
+    footing: 2.5,
+    wall: 7,
+    pitch: 5.5,
+    roof,
+    seed: seed + 40,
+    front: [
+      { u0: 1.8, v0: 1.6, u1: 4.2, v1: 4.4, m: windowLight(2.4, 2.8, frame, seed + 2) },
+      { u0: 5.6, v0: 0, u1: 8.6, v1: 5.2, m: door(3, 5.2, seed + 3) },
+      { u0: 9.1, v0: 2.6, u1: 9.8, v1: 5.2, m: lanternLight(frame) },
+      { u0: 10.2, v0: 1.6, u1: 12.6, v1: 4.4, m: windowLight(2.4, 2.8, frame ? 0 : 1, seed + 4) },
+    ],
+    side: [{ u0: 2.8, v0: 1.8, u1: 5.2, v1: 4.4, m: windowLight(2.4, 2.6, frame, seed + 5) }],
+  });
+  return s.finish(seed);
 }
 
-/** White-ish silhouette for build previews. */
+/** A see-through parchment version of a piece, for build previews. */
 export function ghost(src: Raster): Raster {
   const r = new Raster(src.w, src.h);
   for (let y = 0; y < src.h; y++) {
     for (let x = 0; x < src.w; x++) {
-      const a = src.alpha(x, y);
-      if (a < 200) continue;
+      if (src.alpha(x, y) < 200) continue;
       const c = src.get(x, y)!;
       const lum = (c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11) / 255;
-      r.set(x, y, mix(hex("#7a6a50"), hex("#fbf4e0"), Math.min(1, lum * 1.4)));
+      r.set(x, y, mix(hex("#6e5e46"), hex("#fbf4e0"), Math.min(1, lum * 1.6)));
     }
   }
   return r;
 }
 
-export function robber(frame: 0 | 1): Raster {
-  const W = 48;
-  const H = 84;
-  const base = Math.round(H * 0.85);
-  const r = new Raster(W, H);
-  softShadow(r, W / 2 + 4, base, 16, 4);
-  const s = new Shape();
-  const cloak = ["#121018", "#1e1a26", "#2c2636", "#3c344a", "#52486a"].map(hex);
-  const cx = W / 2;
-  const hoodY = base - 50;
-  // cloak: a bell that flares at the hem
-  for (let y = hoodY; y <= base; y++) {
-    const t = (y - hoodY) / (base - hoodY);
-    const half = 7 + t * 10 + (y > base - 3 ? 1 : 0);
-    const sway = frame ? Math.round(t * t * 1.5) : 0;
-    for (let x = Math.floor(cx - half + sway); x <= cx + half + sway; x++) {
-      const across = (x - (cx + sway)) / half;
-      let tone = 0.62 - across * 0.4 - t * 0.12;
-      // folds
-      if (Math.abs(Math.sin((x - cx) * 0.55 + t * 2)) > 0.92 && t > 0.3) tone -= 0.25;
-      if (y >= base - 1 && (x + y) % 3 === 0) continue;
-      s.put(x, y, ramp(cloak, tone, x, y));
-    }
-  }
-  // hood
-  for (let y = hoodY - 12; y <= hoodY + 6; y++) {
-    for (let x = cx - 9; x <= cx + 9; x++) {
-      const d = ((x - cx) / 9) ** 2 + ((y - (hoodY - 2)) / 10) ** 2;
-      if (d > 1) continue;
-      s.put(x, y, ramp(cloak, 0.7 - ((x - cx) / 9) * 0.4 - ((y - hoodY) / 10) * 0.2, x, y));
-    }
-  }
-  // the dark opening and two eyes
-  for (let y = hoodY - 5; y <= hoodY + 3; y++) {
-    for (let x = cx - 5; x <= cx + 4; x++) {
-      if (((x - cx + 0.5) / 5) ** 2 + ((y - (hoodY - 1)) / 4.5) ** 2 <= 1) s.put(x, y, hex("#07060a"));
-    }
-  }
-  const eye = frame ? GLOW[2]! : GLOW[3]!;
-  for (const ex of [cx - 3, cx + 1]) {
-    s.put(ex, hoodY - 2, eye);
-    s.put(ex + 1, hoodY - 2, eye);
-  }
-  // a stolen sack over the shoulder
-  for (let y = hoodY + 2; y <= hoodY + 16; y++) {
-    for (let x = cx + 6; x <= cx + 18; x++) {
-      const d = ((x - (cx + 12)) / 6.5) ** 2 + ((y - (hoodY + 9)) / 7.5) ** 2;
-      if (d <= 1) s.put(x, y, ramp(P.sand, 0.65 - ((x - cx - 12) / 6.5) * 0.3 - ((y - hoodY - 9) / 7.5) * 0.3, x, y));
-    }
-  }
-  rect(s, cx + 9, hoodY + 1, cx + 14, hoodY + 2, () => P.trunk[1]!);
-  s.draw(r, P.ink);
-  return r;
-}
+export const TOKEN_SIZE = { w: 32, h: 34 };
 
-/** Number token: parchment disc in a carved wooden rim. */
+/** Number token: a thick wooden disc with a parchment face. */
 export function token(): Raster {
-  const W = 64;
-  const r = new Raster(W, W);
-  const c = W / 2;
-  softShadow(r, c + 2, c + 5, 28, 26);
-  const parchment = ["#c9b48a", "#dccaa0", "#ecdcb4", "#f6ead0", "#fff6e2"].map(hex);
-  for (let y = 0; y < W; y++) {
-    for (let x = 0; x < W; x++) {
-      const dx = x + 0.5 - c;
-      const dy = y + 0.5 - c;
-      const d = Math.hypot(dx, dy);
-      if (d > 28) continue;
-      const light = (-dx - dy) / 40;
-      if (d > 23) {
-        const grain = noise(Math.atan2(dy, dx) * 6, d / 2, 4) - 0.5;
-        r.set(x, y, d > 27 ? P.ink : ramp(P.trunk, 0.55 + light * 0.6 + grain * 0.5, x, y));
-      } else if (d > 21.5) r.set(x, y, P.trunk[0]!);
-      else r.set(x, y, ramp(parchment, 0.6 + light * 0.35 + (noise(x / 3, y / 3, 8) - 0.5) * 0.2, x, y));
+  const { w: W, h: H } = TOKEN_SIZE;
+  const s = new Sculpt(W, H, 0, 0);
+  const cx = W / 2;
+  const cy = 15.5;
+  const R = 15.2;
+  // the edge of the disc, seen below its face
+  s.blob(cx, cy + 2.2, R, (dx, dy, px, py) => shade(WOOD, 0.3 - dx / (R * 4) + (noise(Math.atan2(dy, dx) * 8, 0, 3) - 0.5) * 0.3, px, py));
+  s.blob(cx, cy, R, (dx, dy, px, py) => {
+    const d = Math.hypot(dx, dy);
+    const lightSide = -(dx * 0.6 + dy * 0.8) / R;
+    if (d > R - 3.2) {
+      // the rim: turned wood with its grain running round
+      const ring = noise(Math.atan2(dy, dx) * 5, d * 1.4, 11) - 0.5;
+      let t = 0.5 + lightSide * 0.3 + ring * 0.35;
+      if (d > R - 0.9) t -= 0.18;
+      if (d < R - 2.6) t -= 0.25;
+      return shade(WOOD, t, px, py);
     }
-  }
-  return r;
+    // the face sits below the rim, which shades its upper left edge
+    let t = 0.74 + (noise(dx / 3, dy / 3, 5) - 0.5) * 0.25 + (noise(dx * 1.2, dy * 0.4, 6) - 0.5) * 0.12;
+    if (d > R - 5) t += lightSide < 0 ? 0.08 : -0.22 * (1 - (R - 3.2 - d) / 1.8);
+    if (noise(dx / 5, dy / 5, 7) > 0.7) t -= 0.18; // an old stain
+    return shade(PARCHMENT, t, px, py);
+  });
+  return s.finish(41, 0.35);
 }
 
-/** 3:1 harbor: a plank pier on posts with a lantern. */
-export function pier(): Raster {
-  const W = 72;
-  const H = 64;
-  const r = new Raster(W, H);
-  const s = new Shape();
-  // posts
-  for (const [x, y] of [
-    [12, 44],
-    [30, 50],
-    [48, 44],
-    [60, 38],
-  ] as const) {
-    rect(s, x, y - 10, x + 2, y + 8, (px) => TIMBER[px === x ? 2 : 1]!);
-    for (let k = 0; k < 3; k++) r.set(x + k, y + 9, P.water[5]!, 200);
-  }
-  // deck: diagonal planks
-  for (let y = 18; y <= 42; y++) {
-    for (let x = 6; x <= 66; x++) {
-      const u = x - (y - 18) * 0.9;
-      if (u < 4 || u > 46) continue;
-      const plank = Math.floor((y - 18) / 3);
-      const seam = (y - 18) % 3 === 2;
-      s.put(x, y, seam ? TIMBER[1]! : ramp(P.soil, 0.65 + (hash2(Math.floor(u / 9), plank, 2) - 0.5) * 0.3 - (y - 18) / 80, x, y));
-    }
-  }
-  // crates
-  rect(s, 38, 14, 46, 22, (x, y) => (x === 38 || x === 46 || y === 14 || y === 22 || x - 38 === y - 14 ? TIMBER[1]! : ramp(P.soil, 0.7, x, y)));
-  // lantern post
-  rect(s, 20, 2, 21, 24, () => TIMBER[1]!);
-  rect(s, 18, 2, 23, 3, () => TIMBER[0]!);
-  rect(s, 19, 4, 22, 9, (x, y) => ramp(GLOW, 0.9 - Math.abs(x - 20.5) * 0.2 - (y - 4) * 0.05, x, y));
-  s.draw(r, P.ink);
-  return r;
+function crate(seed: number): Material {
+  const boards = planks(WOOD.slice(1), seed, 1.05);
+  return (u, v, z, px, py) => {
+    if (u < 0.4 || u > 2.8 || v < 0.35 || v > 2.85) return shade(WOOD, 0.2, px, py);
+    if (Math.abs(u - v * 0.95) < 0.35) return shade(WOOD, 0.62, px, py);
+    return boards(u, v, z, px, py);
+  };
 }
 
-/** 2:1 harbor: a moored sailboat. */
-export function boat(): Raster {
-  const W = 72;
-  const H = 64;
-  const r = new Raster(W, H);
-  const s = new Shape();
-  // hull
-  for (let y = 40; y <= 52; y++) {
-    const t = (y - 40) / 12;
-    const left = Math.round(8 + t * 8);
-    const right = Math.round(64 - t * 6);
-    for (let x = left; x <= right; x++) {
-      const stripe = y === 43 || y === 44;
-      s.put(x, y, stripe ? hex("#2b6cb0") : ramp(P.trunk.concat([P.soil[4]!]), 0.75 - t * 0.6 + ((x + y) % 7 === 0 ? -0.15 : 0), x, y));
+/** Rings of foam where something stands in the water. */
+function ripples(s: Sculpt, at: Array<[number, number]>, frame: Frame, seed: number, rx = 2.4): void {
+  at.forEach(([x, y], i) => {
+    const [cx, cy] = s.at([x + 0.7, y + 0.7, 0]);
+    const r = rx + (frame ? 0.5 : 0);
+    s.blob(cx, cy, r, (dx, dy, px, py) => {
+      const d = Math.hypot(dx, dy * 2.1);
+      if (d > r || d < r - 0.9) return null;
+      if (noise(Math.atan2(dy, dx) * 3, frame, seed + i) < 0.4) return null;
+      return shade(FOAM, 0.55 - dy * 0.2, px, py);
+    });
+  });
+}
+
+/** General harbor: a jetty on stilts with a crate, rope and a lantern. */
+export function pier(frame: Frame = 0): Raster {
+  const W = 52;
+  const H = 46;
+  const s = new Sculpt(W, H, W / 2, H / 2 + 5);
+  const seed = 71;
+  const post = (x: number, y: number) =>
+    s.box([x, y, -3], [1.7, 1.7, 7.8], { left: planks(WOOD.slice(0, 4), seed + x, 0.8, true), right: solid(WOOD.slice(0, 3), 0.35, seed + y) });
+  ripples(s, [[-11.5, -4.8], [10, -4.8], [-11.5, 4.2], [10, 4.2]], frame, seed, 2.8);
+  post(-11.5, -4.8);
+  post(10, -4.8);
+  s.box([-12.8, -4.6, 2.4], [24.6, 9.6, 1.1], { left: solid(WOOD.slice(0, 4), 0.3, seed), right: solid(WOOD.slice(0, 4), 0.2, seed + 1), top: planks(WOOD, seed + 2, 1.7, true) });
+  post(-11.5, 4.2);
+  post(10, 4.2);
+  // crate and a coil of rope
+  s.box([-9.4, -3.8, 3.5], [4, 4, 4], { left: crate(seed + 3), right: crate(seed + 4), top: planks(WOOD.slice(1), seed + 5, 1.3) });
+  const [rx, ry] = s.at([-2, 1.8, 3.5]);
+  s.blob(rx, ry - 0.7, 2.3, (dx, dy, px, py) => {
+    const d = Math.hypot(dx, dy * 1.6);
+    if (d > 2.3) return null;
+    if (d < 0.8) return shade(WOOD, 0.1, px, py);
+    return shade(LIME, 0.35 + Math.sin(d * 6) * 0.15 - (dx + dy) * 0.08, px, py);
+  });
+  // lantern post at the end
+  s.box([7.6, 2.4, 3.5], [1, 1, 11.5], { left: solid(TIMBER, 0.6, seed), right: solid(TIMBER, 0.3, seed) });
+  s.box([8.5, 2.5, 14.4], [2.6, 0.7, 0.6], { left: solid(TIMBER, 0.5, seed), top: solid(TIMBER, 0.6, seed) });
+  s.box([9.6, 1.9, 10.4], [2.2, 2.2, 3.4], { left: lanternLight(frame), right: lanternLight(frame) });
+  s.box([9.2, 1.5, 13.8], [3, 3, 0.6], { left: solid(IRON, 0.6, seed), right: solid(IRON, 0.3, seed), top: solid(IRON, 0.8, seed) });
+  return s.finish(seed);
+}
+
+/** Specific harbor: a fishing boat at anchor, rocking between frames. */
+export function boat(frame: Frame = 0): Raster {
+  const W = 54;
+  const H = 54;
+  const seed = 83;
+  const s = new Sculpt(W, H, W / 2, H / 2 + 10 + frame);
+  const L = 13.5;
+  const B = 4.2;
+  const keel = (u: number, len: number) => 2.8 * ((2 * u) / len - 1) ** 4;
+  const hullPlanks = planks(WOOD, seed, 1.1);
+  const stripe = solid(["#2a3a46", "#3c5262", "#56707e"].map(hex), 0.5, seed);
+  const hull =
+    (len: number): Material =>
+    (u, v, z, px, py) => {
+      if (v < keel(u, len)) return null;
+      if (v > 4.4) return shade(WOOD, 0.75, px, py);
+      if (v > 3.3 && v < 4) return stripe(u, v, z, px, py);
+      return hullPlanks(u, v, z, px, py);
+    };
+  ripples(s, [[-7, 3.2], [3, 3.2], [11, 1.2]], frame, seed, 3.8);
+  // far wall inside, the floor and a thwart, then the near side
+  s.face([-L, -B, 1.8], [2 * L, 0, 0], [0, 0, 3.4], planks(WOOD.slice(0, 4), seed + 1, 1), { light: 0.5 });
+  s.face([-L, -B, 1.8], [2 * L, 0, 0], [0, 2 * B, 0], planks(WOOD.slice(0, 4), seed + 2, 1.2, true), { light: 0.55 });
+  s.box([-3.5, -B, 3], [1.8, 2 * B, 0.7], { top: solid(WOOD, 0.6, seed), left: solid(WOOD, 0.3, seed) });
+  s.face([-L, B, 0], [2 * L, 0, 0], [0, 0, 5.2], hull(2 * L));
+  // the bow comes to a point
+  s.face([L, B, 0], [4.2, -B, 0], [0, 0, 5.8], (u, v, z, px, py) => (v < 1.6 + u * 0.3 ? null : hull(7)(u + 3.5, v, z, px, py)));
+  s.face([L, -B, 5.2], [0, 2 * B, 0], [4.2, B, 0.5], solid(WOOD, 0.7, seed), { tri: true });
+  // mast, boom and a patched sail
+  s.box([-0.6, -0.5, 1.8], [1, 1, 25], { left: solid(WOOD, 0.6, seed + 3), right: solid(WOOD, 0.3, seed + 3) });
+  const clew = frame ? 11.6 : 11;
+  s.box([-clew, -0.3, 7.6], [clew, 0.7, 0.7], { left: solid(WOOD, 0.55, seed + 4), top: solid(WOOD, 0.7, seed + 4) });
+  const patch = ["#5a2a1c", "#7e3c24", "#9c5430"].map(hex);
+  s.face(
+    [-0.4, 0.6, 8.3],
+    [-clew, frame ? 0.5 : 0, 0],
+    [0, 0, 17.5],
+    (u, v, _z, px, py) => {
+      // a triangle from the boom up the mast, bellied by the wind
+      const belly = Math.sin((u / clew) * Math.PI) * (frame ? 0.18 : 0.12);
+      let t = 0.62 - (u / clew) * 0.18 + belly + (noise(u / 2, v / 2, seed + 5) - 0.5) * 0.18;
+      if (Math.abs(v % 3.2) < 0.25) t -= 0.18; // seams
+      if (u > 3 && u < 5.6 && v > 3.4 && v < 6.6) return shade(patch, 0.5 + belly, px, py);
+      return shade(CANVAS, t, px, py);
+    },
+    { tri: true, light: 0.95 },
+  );
+  // a lamp on the stern
+  s.box([-L + 0.4, -0.3, 5.2], [0.6, 0.6, 3.4], { left: solid(TIMBER, 0.5, seed) });
+  s.box([-L, -0.7, 8.4], [1.6, 1.6, 2.4], { left: lanternLight(frame), right: lanternLight(frame) });
+  return s.finish(seed);
+}
+
+export const ROAD_TILE = { w: 12, h: 10 };
+
+/**
+ * A repeating strip of plank road seen from above: boards across, rails in
+ * the owner's color, a shadow under the far side. Tiles along x.
+ */
+export function roadTile(color: string): Raster {
+  const { w: W, h: H } = ROAD_TILE;
+  const K = 4;
+  const hi = new Raster(W * K, H * K);
+  const rail = factionRamp(color);
+  const seed = seedOf(color);
+  for (let y = 0; y < H * K; y++) {
+    for (let x = 0; x < W * K; x++) {
+      const fx = (x + 0.5) / K;
+      const fy = (y + 0.5) / K;
+      if (fy < 1) continue;
+      if (fy > 9) {
+        hi.set(x, y, [10, 8, 6], 120);
+        continue;
+      }
+      let c: RGB;
+      if (fy < 2.4 || fy > 7.6) {
+        // rails: lit along the top, shaded along the bottom, nailed at each board
+        const top = fy < 2.4;
+        let t = top ? 0.72 - (fy - 1) * 0.12 : 0.42 - (fy - 7.6) * 0.18;
+        if (Math.abs((fx % 3) - 1.5) < 0.35 && Math.abs(fy - (top ? 1.7 : 8.3)) < 0.35) t = 0.08;
+        c = shade(rail, t + (noise(fx * 2, fy, seed) - 0.5) * 0.2, x, y);
+      } else {
+        const board = Math.floor(fx / 3);
+        const f = fx / 3 - board;
+        if (f < 0.12) c = shade(WOOD, 0.04, x, y);
+        else {
+          let t = 0.52 + (((board * 2654435761) >>> 0) % 7) / 7 * 0.25 - 0.12 + (noise(board * 5.3, fy * 1.6, seed + 1) - 0.5) * 0.4;
+          if (f > 0.82) t -= 0.14;
+          if (fy < 3.1) t -= 0.2; // under the rail's lip
+          c = shade(WOOD, t, x, y);
+        }
+      }
+      hi.set(x, y, c);
     }
   }
-  // mast and sail
-  rect(s, 36, 6, 37, 40, () => TIMBER[1]!);
-  const sail = ["#b8ac90", "#d8ccac", "#f0e6cc", "#fff8e8"].map(hex);
-  for (let y = 8; y <= 36; y++) {
-    const t = (y - 8) / 28;
-    const right = Math.round(38 + t * 20 + Math.sin(t * Math.PI) * 4);
-    for (let x = 38; x <= right; x++) s.put(x, y, ramp(sail, 0.85 - (x - 38) / 40 - t * 0.2 + (y % 6 === 0 ? -0.2 : 0), x, y));
-  }
-  for (let y = 14; y <= 34; y++) {
-    const t = (y - 14) / 20;
-    for (let x = Math.round(34 - t * 14); x <= 35; x++) s.put(x, y, ramp(sail, 0.55 - t * 0.2, x, y));
-  }
-  s.draw(r, P.ink);
-  // ripples
-  for (let x = 6; x < 68; x++) if (hash2(x, 1, 9) > 0.45) r.set(x, 54 + (x % 5 === 0 ? 1 : 0), P.water[5]!, 190);
-  return r;
+  const out = downsample(hi, K);
+  grade(out, seed, 0.4);
+  return out;
 }

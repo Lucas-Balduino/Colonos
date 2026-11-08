@@ -9,15 +9,17 @@ import { RESOURCE_LABEL } from "../core/resources.ts";
 import type { Action, Board, HexId, PublicView } from "../core/types.ts";
 import {
   BOARD_URLS,
-  HI_DENSITY_URLS,
   CHIP_SPRITE,
+  frameSprite,
   citySprite,
   HEX_SIZE,
+  roadSprite,
   settlementSprite,
 } from "./assets.ts";
 import { isMuted, setMuted, sfx } from "./audio.ts";
 import { FACTION_HEX, PALETTE, shade } from "./theme.ts";
-import { AnimClockProvider, animFrameNow, useAnimFrame } from "./anim-clock.tsx";
+import { AnimClockProvider, animFrameNow, useAnimFrame, useIdleBeat } from "./anim-clock.tsx";
+import { PIECE_ANCHOR, TOKEN_SIZE } from "../art/pieces.ts";
 import { buildModeCopy, phaseCopy, type BuildMode } from "./copy.ts";
 import { preloadSprites } from "./preload.ts";
 import { useIslandArt, type IslandTexture } from "./useIslandArt.ts";
@@ -218,15 +220,10 @@ export function BoardView({
   const zoom = pinchZoom == null ? Math.min(3, fit * nivel) : Math.min(3, Math.max(fit, pinchZoom));
   const island = useIslandArt(view.board);
   const [muted, setMutedView] = useState(isMuted);
-  // the island has 2 texels per world pixel: crisp pixels once they are big enough
+  // one texel per world pixel, like every piece: crisp once a texel covers a screen pixel
   useEffect(() => {
-    const mode = zoom / 2 >= 1 ? "nearest" : "linear";
-    if (island) island.texture.source.scaleMode = mode;
-    for (const url of HI_DENSITY_URLS) {
-      const tex = textures?.[url];
-      if (tex) tex.source.scaleMode = mode;
-    }
-  }, [island, textures, zoom]);
+    if (island) island.texture.source.scaleMode = zoom >= 1 ? "nearest" : "linear";
+  }, [island, zoom]);
   fitRef.current = fit;
   zoomRef.current = zoom;
   if (import.meta.env.DEV) {
@@ -786,9 +783,10 @@ export function BoardView({
                       from={roads[edge.id]!.from}
                       edgeId={edge.id}
                       onDone={finishRoad}
+                      texture={textures?.[roadSprite(color)]}
                     />
                   ) : ghost || edge.road ? (
-                    <DirtTrack length={length} color={color} ghost={ghost} hovered={hovered} />
+                    <DirtTrack length={length} color={color} ghost={ghost} hovered={hovered} texture={textures?.[roadSprite(color)]} />
                   ) : null}
                 </pixiContainer>
               );
@@ -804,19 +802,21 @@ export function BoardView({
               const color = owner?.color ?? youColor;
               const kind = previewCity ? "city" : (v.building?.type ?? "settlement");
               const url = kind === "city" ? citySprite(color) : settlementSprite(color);
-              const tex = textures?.[url];
               const piece = (
-                <pixiContainer scale={0.82} eventMode="none">
-                  {v.building ? <LanternGlow seed={p.x * 7 + p.y * 13} big={v.building.type === "city"} /> : null}
-                  {ghost || v.building ? <VertexPad /> : null}
-                  {(ghost || cityPick) && !hovered ? <SurveyStakes color={color} /> : null}
-                  {((ghost && hovered) || (v.building && !previewCity) || previewCity) && tex ? (
-                    <pixiSprite
-                      texture={tex}
-                      anchor={{ x: 0.5, y: 0.9 }}
-                      scale={kind === "city" ? 0.7 : 0.74}
+                <pixiContainer eventMode="none">
+                  <pixiContainer scale={0.82} eventMode="none">
+                    {v.building ? <LanternGlow seed={p.x * 7 + p.y * 13} big={v.building.type === "city"} /> : null}
+                    {ghost || v.building ? <VertexPad /> : null}
+                    {(ghost || cityPick) && !hovered ? <SurveyStakes color={color} /> : null}
+                  </pixiContainer>
+                  {(ghost && hovered) || (v.building && !previewCity) || previewCity ? (
+                    <PieceSprite
+                      textures={textures}
+                      url={url}
+                      kind={kind}
+                      phase={Math.round(p.x + p.y) & 1}
+                      animate={Boolean(v.building) && !previewCity}
                       alpha={ghost || previewCity ? 0.65 : 1}
-                      eventMode="none"
                     />
                   ) : null}
                 </pixiContainer>
@@ -965,6 +965,36 @@ function portHint(port: Board["ports"][number] | undefined): string {
   return `Porto de ${name}: 2 ${name} por 1 recurso à escolha`;
 }
 
+/** A jetty or boat on the robber's beat: the lantern flickers, the boat bobs. */
+function PortSprite({ textures, url, phase }: { textures: Record<string, Texture> | null; url: string; phase: number }) {
+  const beat = useIdleBeat(phase);
+  const tex = textures?.[frameSprite(url, beat)] ?? textures?.[url];
+  if (!tex) return null;
+  return <pixiSprite texture={tex} anchor={0.5} eventMode="none" />;
+}
+
+/** A house or city on the robber's beat: windows flicker, smoke drifts, flags wave. */
+function PieceSprite({
+  textures,
+  url,
+  kind,
+  phase,
+  animate,
+  alpha,
+}: {
+  textures: Record<string, Texture> | null;
+  url: string;
+  kind: "settlement" | "city";
+  phase: number;
+  animate: boolean;
+  alpha: number;
+}) {
+  const beat = useIdleBeat(phase);
+  const tex = textures?.[frameSprite(url, animate ? beat : 0)] ?? textures?.[url];
+  if (!tex) return null;
+  return <pixiSprite texture={tex} anchor={PIECE_ANCHOR[kind]} alpha={alpha} eventMode="none" />;
+}
+
 function RobberSprite({
   x,
   y,
@@ -979,11 +1009,11 @@ function RobberSprite({
   hopping?: boolean;
 }) {
   const frame = useAnimFrame();
-  const blink = Math.floor((frame * 83) / 380) % 2;
+  const blink = useIdleBeat();
   const hop = hopping && frame % 2 === 0 ? 2 : 0;
   const tex = textures?.[`/sprites/robber-${blink}.png`];
   if (!tex) return null;
-  return <pixiSprite texture={tex} x={x} y={y - hop} alpha={alpha} anchor={{ x: 0.5, y: 0.85 }} scale={0.68} eventMode="none" />;
+  return <pixiSprite texture={tex} x={x} y={y - hop} alpha={alpha} anchor={{ x: 0.5, y: 0.85 }} eventMode="none" />;
 }
 
 function TableLoading({ progress }: { progress: number }) {
@@ -1046,6 +1076,7 @@ function DirtTrack({
   hovered,
   reveal = 1,
   from = -1,
+  texture,
 }: {
   length: number;
   color: string;
@@ -1053,6 +1084,8 @@ function DirtTrack({
   hovered: boolean;
   reveal?: number;
   from?: -1 | 1;
+  /** Painted plank strip (road-*.png); without it the road is drawn flat. */
+  texture?: Texture;
 }) {
   const draw = useCallback(
     (g: PixiGraphics) => {
@@ -1078,6 +1111,13 @@ function DirtTrack({
       }
       const x0 = reveal >= 1 ? left : from < 0 ? left : left + (1 - reveal) * L;
       const w = reveal >= 1 ? L : Math.max(1, reveal * L);
+      if (texture) {
+        if (hovered) {
+          g.rect(x0 - 2, -5.5, w + 4, 11);
+          g.stroke({ width: 1, color: PALETTE.parchment, alpha: 0.7 });
+        }
+        return;
+      }
       g.rect(x0 - 1, -2, w + 2, 6.5);
       g.fill({ color: 0x0d0805, alpha: 0.45 });
       g.rect(x0 - 1, -3.5, w + 2, 7);
@@ -1098,8 +1138,21 @@ function DirtTrack({
         g.stroke({ width: 1, color: PALETTE.parchment, alpha: 0.7 });
       }
     },
-    [length, color, ghost, hovered, reveal, from],
+    [length, color, ghost, hovered, reveal, from, texture],
   );
+  if (texture && !ghost) {
+    const pad = 8;
+    const L = Math.max(10, length - pad * 2);
+    const left = -L / 2;
+    const x0 = reveal >= 1 ? left : from < 0 ? left : left + (1 - reveal) * L;
+    const w = reveal >= 1 ? L : Math.max(1, reveal * L);
+    return (
+      <pixiContainer eventMode="none">
+        <pixiTilingSprite texture={texture} x={Math.round(x0)} y={-5} width={Math.round(w)} height={10} eventMode="none" />
+        <pixiGraphics draw={draw} />
+      </pixiContainer>
+    );
+  }
   return <pixiGraphics draw={draw} />;
 }
 
@@ -1126,6 +1179,7 @@ function RevealingTrack({
   from,
   edgeId,
   onDone,
+  texture,
 }: {
   length: number;
   color: string;
@@ -1133,6 +1187,7 @@ function RevealingTrack({
   startFrame: number;
   from: -1 | 1;
   edgeId: string;
+  texture?: Texture;
   onDone: (id: string) => void;
 }) {
   const frame = useAnimFrame();
@@ -1143,7 +1198,7 @@ function RevealingTrack({
   useEffect(() => {
     if (done) onDone(edgeId);
   }, [done, edgeId, onDone]);
-  return <DirtTrack length={length} color={color} ghost={false} hovered={hovered} reveal={reveal} from={from} />;
+  return <DirtTrack length={length} color={color} ghost={false} hovered={hovered} reveal={reveal} from={from} texture={texture} />;
 }
 
 function FallingHouse({
@@ -1223,7 +1278,7 @@ function NumberToken({
   return (
     <pixiContainer x={x} y={y} eventMode="none">
       {texture ? (
-        <pixiSprite texture={texture} anchor={0.5} scale={0.52} />
+        <pixiSprite texture={texture} anchor={{ x: 0.5, y: 15.5 / TOKEN_SIZE.h }} />
       ) : (
         <FallbackToken />
       )}
@@ -1303,7 +1358,6 @@ const IslandPicture = memo(function IslandPicture({
       {board.ports.map((port) => {
         const anchor = portAnchor(board, origin, port.edgeId);
         const url = port.ratio === 3 ? "/sprites/port-any.png" : "/sprites/port-2.png";
-        const tex = textures?.[url];
         const specific = port.resource !== "any";
         const chip = specific ? textures?.[CHIP_SPRITE[port.resource]] : undefined;
         const ends = port.vertices.map((v) => vertexPos(board, v));
@@ -1312,7 +1366,7 @@ const IslandPicture = memo(function IslandPicture({
             <PortPiers from={anchor} to={ends} />
             <pixiContainer x={anchor.x} y={anchor.y}>
               <LanternGlow seed={anchor.x * 3 + anchor.y} />
-              {tex ? <pixiSprite texture={tex} anchor={0.5} scale={0.45} eventMode="none" /> : null}
+              <PortSprite textures={textures} url={url} phase={Math.round(anchor.x) & 1} />
               <PortPlaque specific={specific} />
               {chip ? <pixiSprite texture={chip} x={-8} y={15} anchor={0.5} eventMode="none" /> : null}
               <pixiText

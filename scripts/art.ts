@@ -1,11 +1,11 @@
 /**
  * Procedural pixel art. `npm run art` rewrites the HUD icons and cards, the
- * sea tile and the lobby poster in public/sprites (the island itself is
+ * board pieces, the sea tile and the lobby poster in public/sprites (the island itself is
  * painted in the browser for each map). Pass a folder to also write zoomed
  * contact sheets there.
  */
 import { join } from "node:path";
-import { boat, city, ghost, pier, robber, settlement, token } from "../src/art/pieces.ts";
+import { boat, city, ghost, pier, roadTile, settlement, token } from "../src/art/pieces.ts";
 import { seaTile } from "../src/art/sea.ts";
 import { card, DEV_ICONS, icon, ICONS, type DevIconName, type IconName } from "./art/icons.ts";
 import { poster } from "./art/poster.ts";
@@ -20,17 +20,21 @@ for (const name of Object.keys(ICONS) as IconName[]) {
 for (const name of Object.keys(DEV_ICONS) as DevIconName[]) writePng(card(name), join(out, `card-${name}.png`));
 const FACTIONS = { red: "#c44536", blue: "#2b6cb0", orange: "#d97706", ivory: "#e8e0d0" };
 const pieces: Record<string, Raster> = {};
+// two frames per piece, like the robber: name.png and name-1.png
 for (const [id, color] of Object.entries(FACTIONS)) {
-  pieces[`settlement-${id}`] = settlement(color);
-  pieces[`city-${id}`] = city(color);
+  pieces[`settlement-${id}`] = settlement(color, 0);
+  pieces[`settlement-${id}-1`] = settlement(color, 1);
+  pieces[`city-${id}`] = city(color, 0);
+  pieces[`city-${id}-1`] = city(color, 1);
+  pieces[`road-${id}`] = roadTile(color);
 }
 pieces["settlement-ghost"] = ghost(settlement(FACTIONS.ivory));
 pieces["city-ghost"] = ghost(city(FACTIONS.ivory));
-pieces["robber-0"] = robber(0);
-pieces["robber-1"] = robber(1);
 pieces.token = token();
-pieces["port-any"] = pier();
-pieces["port-2"] = boat();
+pieces["port-any"] = pier(0);
+pieces["port-any-1"] = pier(1);
+pieces["port-2"] = boat(0);
+pieces["port-2-1"] = boat(1);
 for (const [name, img] of Object.entries(pieces)) writePng(img, join(out, `${name}.png`));
 const sea = seaTile();
 writePng(sea, join(out, "sea-tile.png"));
@@ -50,8 +54,8 @@ if (sheetDir) {
   writePng(scaleUp(sheet, 6), join(sheetDir, "icons.png"));
   const list = Object.values(pieces);
   const pw = list.reduce((n, p) => n + p.w + 6, 0);
-  const ps = new Raster(pw, 104);
-  for (let y = 0; y < 104; y++) for (let x = 0; x < pw; x++) ps.set(x, y, (x >> 3) % 2 ? [92, 128, 64] : [84, 118, 58]);
+  const ps = new Raster(pw, 70);
+  for (let y = 0; y < 70; y++) for (let x = 0; x < pw; x++) ps.set(x, y, (x >> 3) % 2 ? [92, 128, 64] : [84, 118, 58]);
   let px = 0;
   for (const p of list) {
     for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
@@ -63,6 +67,6 @@ if (sheetDir) {
     }
     px += p.w + 6;
   }
-  writePng(scaleUp(ps, 2), join(sheetDir, "pieces.png"));
+  writePng(scaleUp(ps, 4), join(sheetDir, "pieces.png"));
 }
 console.log("art written to", out);

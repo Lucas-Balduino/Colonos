@@ -4,7 +4,7 @@
  * comes from the top left; shadows fall to the bottom right.
  */
 import { P } from "./palette.ts";
-import { hash2, hex, mix, noise, ramp, type Raster, type RGB } from "./raster.ts";
+import { hash2, hex, mix, noise, tone, type Raster, type RGB } from "./raster.ts";
 
 /** A sprite assembled pixel by pixel, then stamped with an outline. */
 export class Shape {
@@ -78,7 +78,7 @@ function canopy(shape: Shape, cx: number, cy: number, rx: number, ry: number, co
         let t = local * 0.42 + global * 0.62;
         // a dark crease along the lower rim of each clump
         if (dx * 0.5 + dy > c.r * 0.72) t -= 0.22;
-        shape.put(x, y, ramp(colors, t, x, y));
+        shape.put(x, y, tone(colors, t, x, y));
       }
     }
   }
@@ -146,7 +146,7 @@ export function rock(r: Raster, x: number, y: number, size: number, colors: read
       // flat-ish facets: quantize the light a little
       let t = ball(dx * rx, dy * ry, Math.max(rx, ry)) + (noise(px / (1.5 * s), py / (1.5 * s), seed + 3) - 0.5) * 0.3;
       if (dy < -0.35) t += 0.12;
-      shape.put(px, py, ramp(colors, t, px, py));
+      shape.put(px, py, tone(colors, t, px, py));
     }
   }
   shape.draw(r, mix(colors[0]!, P.ink, 0.5));
@@ -192,8 +192,8 @@ export function peak(r: Raster, x: number, baseY: number, halfW: number, height:
       const e = noise(px / (1.2 * s), y / (1.2 * s), seed + 5) - noise((px + 1) / (1.2 * s), (y + 1) / (1.2 * s), seed + 5);
       shade += e * 0.5;
       const snowLine = snowBase + g * 0.18 + (noise(px / (3 * s), 1, seed + 6) - 0.5) * 0.12;
-      if (t < snowLine) shape.put(px, y, ramp(P.snow, (lit ? 0.75 : 0.22) + (g - 0.5) * 0.3 + e * 0.6, px, y));
-      else shape.put(px, y, ramp(P.stone, shade, px, y));
+      if (t < snowLine) shape.put(px, y, tone(P.snow, (lit ? 0.75 : 0.22) + (g - 0.5) * 0.3 + e * 0.6, px, y));
+      else shape.put(px, y, tone(P.stone, shade, px, y));
     }
   }
   shape.draw(r, P.stone[0]!);
@@ -248,7 +248,7 @@ export function sheep(r: Raster, x: number, y: number, facing: 1 | -1, s: number
       if (dx * dx + dy * dy > 1 + (curl - 0.5) * 0.5) continue;
       let t = ball(dx * rx, dy * ry, rx) + (curl - 0.5) * 0.5;
       if (dy > 0.55) t -= 0.15;
-      shape.put(px, py, ramp(P.wool, t + 0.12, px, py));
+      shape.put(px, py, tone(P.wool, t + 0.12, px, py));
     }
   }
   const hx = x + facing * s * 5.5;
@@ -300,7 +300,7 @@ export function haystack(r: Raster, x: number, y: number, s: number, seed: numbe
       if (dx * dx + dy * dy > 1) continue;
       const straw = noise(px / (0.8 * s), py / (2.5 * s), seed) - 0.5;
       const band = Math.floor((y - py) / (2.2 * s)) % 2 === 0 ? 0.06 : -0.04;
-      shape.put(px, py, ramp(P.gold, ball(dx * rx, dy * ry, rx) + straw * 0.45 + band + 0.05, px, py));
+      shape.put(px, py, tone(P.gold, ball(dx * rx, dy * ry, rx) + straw * 0.45 + band + 0.05, px, py));
     }
   }
   shape.draw(r, P.gold[0]!);
@@ -331,7 +331,7 @@ export function brickStack(r: Raster, x: number, y: number, s: number): void {
     const row = Math.floor((y - py) / bh);
     for (let px = left; px < left + w; px++) {
       const mortar = (y - py) % bh === 0 || (px - left + (row % 2) * (bw / 2)) % bw === 0;
-      shape.put(px, py, mortar ? P.clay[1]! : ramp(P.clay, 0.62 - (px - left) / w / 4 + (hash2(px >> 2, row, 3) - 0.5) * 0.2, px, py));
+      shape.put(px, py, mortar ? P.clay[1]! : tone(P.clay, 0.62 - (px - left) / w / 4 + (hash2(px >> 2, row, 3) - 0.5) * 0.2, px, py));
     }
   }
   const depth = 2 * s;
@@ -353,7 +353,7 @@ export function kiln(r: Raster, x: number, y: number, s: number): void {
       const dy = (py + 0.5 - y) / ry;
       if (dx * dx + dy * dy > 1) continue;
       const brick = ((py >> 1) + (px >> 2)) % 5 === 0 ? -0.15 : 0;
-      shape.put(px, py, ramp(P.clay, ball(dx * rx, dy * ry, rx) + brick + 0.05, px, py));
+      shape.put(px, py, tone(P.clay, ball(dx * rx, dy * ry, rx) + brick + 0.05, px, py));
     }
   }
   // glowing mouth
@@ -373,21 +373,25 @@ export function kiln(r: Raster, x: number, y: number, s: number): void {
 export function cactus(r: Raster, x: number, y: number, s: number, seed: number): void {
   shadow(r, x + s * 3, y, s * 4, s * 1.5, 0.62);
   const shape = new Shape();
-  const g = P.oak;
+  // dusty sage, round in the light, ribbed
+  const g = [hex("#1c2818"), hex("#2c3e24"), hex("#435634"), hex("#5e7046"), hex("#7c8c5a"), hex("#9aa676")];
   const h = Math.round((9 + hash2(1, 1, seed) * 5) * s);
   const w = Math.max(2, Math.round(1.4 * s));
   const column = (cx: number, top: number, bottom: number) => {
     for (let py = top; py <= bottom; py++) {
       for (let k = -w; k <= w; k++) {
-        const t = 0.65 - (k / w) * 0.35 + ((py + k) % 3 === 0 ? 0.12 : 0);
-        shape.put(cx + k, py, ramp(g, t, cx + k, py));
+        const round = Math.cos((k / (w + 0.5)) * 1.3);
+        let t = 0.25 + round * 0.4 - (k / w) * 0.18 - ((bottom - py) < s ? 0.12 : 0);
+        if (k !== 0 && Math.abs(k) % 2 === 0) t -= 0.14;
+        if (hash2(cx + k, py, seed) < 0.06) t += 0.3; // a spine catching the sun
+        shape.put(cx + k, py, tone(g, t, cx + k, py));
       }
     }
   };
   column(x, y - h, y);
   const armY = y - Math.round(h * 0.55);
   const ax = x - 3 * s;
-  for (let k = 0; k <= 3 * s; k++) shape.put(x - k, armY, g[3]!);
+  for (let k = 0; k <= 3 * s; k++) shape.put(x - k, armY, g[2]!);
   column(ax, armY - 4 * s, armY);
   if (hash2(2, 2, seed) > 0.4) {
     const by = y - Math.round(h * 0.35);

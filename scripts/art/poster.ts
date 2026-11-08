@@ -39,14 +39,15 @@ function blit(r: Raster, src: Raster, x0: number, y0: number, k = 1): void {
 export function poster(spriteDir: string, sea: Raster): Raster {
   const board = createBeginnerBoard();
   const art = paintIsland(board, 2);
-  const s = art.scale;
+  // the poster shows every texel as 2x2, like the table at zoom 2
+  const s = 2 / art.scale;
   const W = 1600;
   const H = 1120;
   const r = new Raster(W, H);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) r.set(x, y, sea.get((x >> 1) % sea.w, (y >> 1) % sea.h)!);
-  const ox = Math.round((W - art.raster.w) / 2);
-  const oy = Math.round((H - art.raster.h) / 2) - 10;
-  blit(r, art.raster, ox, oy);
+  const ox = Math.round((W - art.raster.w * s) / 2);
+  const oy = Math.round((H - art.raster.h * s) / 2) - 10;
+  blit(r, art.raster, ox, oy, s);
 
   const toPx = (wx: number, wy: number) => ({ x: ox + (wx - art.x) * s, y: oy + (wy - art.y) * s });
   const homes: Array<[number, number, number, string]> = [
@@ -62,7 +63,8 @@ export function poster(spriteDir: string, sea: Raster): Raster {
     const c = hexCorner(pointyHexToPixel({ q, r: rr }, 56), 56, i);
     const p = toPx(c.x, c.y);
     const img = loadPng(join(spriteDir, `${sprite}.png`));
-    blit(r, img, Math.round(p.x - img.w), Math.round(p.y - img.h * 1.8), 2);
+    // footprint center sits 8 px above the sprite's bottom (PIECE_ANCHOR)
+    blit(r, img, Math.round(p.x - img.w), Math.round(p.y - (img.h - 8) * 2), 2);
     lights.push({ x: p.x, y: p.y - 26 });
   }
   const boat = loadPng(join(spriteDir, "port-2.png"));

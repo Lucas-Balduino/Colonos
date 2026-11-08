@@ -134,3 +134,73 @@ export function ramp(colors: readonly RGB[], t: number, x: number, y: number): R
   const frac = v - i;
   return colors[Math.min(colors.length - 1, frac > bayer(x, y) ? i + 1 : i)]!;
 }
+
+/* ---------- painterly finish (the robber's look) ---------- */
+
+/**
+ * Like `ramp`, but blends smoothly between steps with a little grain instead
+ * of ordered dithering, so a downsampled picture reads painted, not patterned.
+ */
+export function tone(colors: readonly RGB[], t: number, x: number, y: number): RGB {
+  const v = Math.max(0, Math.min(0.9999, t + (hash2(x, y, 7177) - 0.5) * 0.1)) * (colors.length - 1);
+  const i = Math.floor(v);
+  return mix(colors[i]!, colors[Math.min(colors.length - 1, i + 1)]!, v - i);
+}
+
+/** Box-averages `k`x`k` blocks, weighting color by alpha. */
+export function downsample(src: Raster, k: number): Raster {
+  const out = new Raster(Math.floor(src.w / k), Math.floor(src.h / k));
+  const d = src.data;
+  for (let y = 0; y < out.h; y++) {
+    for (let x = 0; x < out.w; x++) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      for (let j = 0; j < k; j++) {
+        for (let i = 0; i < k; i++) {
+          const o = ((y * k + j) * src.w + x * k + i) * 4;
+          const w = d[o + 3]!;
+          r += d[o]! * w;
+          g += d[o + 1]! * w;
+          b += d[o + 2]! * w;
+          a += w;
+        }
+      }
+      if (!a) continue;
+      const o = (y * out.w + x) * 4;
+      out.data[o] = r / a;
+      out.data[o + 1] = g / a;
+      out.data[o + 2] = b / a;
+      out.data[o + 3] = a / (k * k);
+    }
+  }
+  return out;
+}
+
+/**
+ * The robber's grade: a little less saturation, shadows sinking toward a cool
+ * violet, lights warming toward lantern gold, and a per-pixel grain so no two
+ * neighbors are quite the same color.
+ */
+export function grade(r: Raster, seed: number, amount = 1): void {
+  const d = r.data;
+  for (let y = 0; y < r.h; y++) {
+    for (let x = 0; x < r.w; x++) {
+      const o = (y * r.w + x) * 4;
+      if (!d[o + 3]) continue;
+      const R = d[o]!;
+      const G = d[o + 1]!;
+      const B = d[o + 2]!;
+      const L = 0.3 * R + 0.59 * G + 0.11 * B;
+      const t = L / 255;
+      const sat = 1 - 0.2 * amount;
+      const k = (1 - amount) + amount * (0.7 + 0.42 * t) * (1 + (hash2(x, y, seed) - 0.5) * 0.12);
+      const sh = Math.max(0, 0.42 - t) * amount;
+      const hl = Math.max(0, t - 0.55) * amount;
+      d[o] = (L + (R - L) * sat) * k + 10 * sh + 34 * hl;
+      d[o + 1] = (L + (G - L) * sat) * k - 6 * sh + 14 * hl;
+      d[o + 2] = (L + (B - L) * sat) * k + 22 * sh - 22 * hl;
+    }
+  }
+}

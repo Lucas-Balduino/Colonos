@@ -48,18 +48,24 @@ export function diceSprite(n: number): string {
   return `/sprites/dice-${Math.min(6, Math.max(1, n))}.png`;
 }
 
+/** Second frame of an animated piece: `name.png` becomes `name-1.png`. */
+export function frameSprite(url: string, frame: number): string {
+  return frame ? url.replace(/\.png$/, "-1.png") : url;
+}
+
 export const BOARD_URLS = [
   "/sprites/sea-tile.png",
   "/sprites/robber-0.png",
   "/sprites/robber-1.png",
   "/sprites/token.png",
-  "/sprites/port-any.png",
-  "/sprites/port-2.png",
+  ...["/sprites/port-any.png", "/sprites/port-2.png"].flatMap((u) => [u, frameSprite(u, 1)]),
   "/sprites/settlement-ghost.png",
   "/sprites/city-ghost.png",
   ...["red", "blue", "orange", "ivory"].flatMap((id) => [
     `/sprites/settlement-${id}.png`,
+    `/sprites/settlement-${id}-1.png`,
     `/sprites/city-${id}.png`,
+    `/sprites/city-${id}-1.png`,
     `/sprites/road-${id}.png`,
   ]),
 ];
@@ -71,6 +77,3 @@ export const HUD_URLS = [
 ];
 
 export const ALL_SPRITE_URLS = [...new Set([...BOARD_URLS, ...HUD_URLS])];
-
-/** Sprites drawn at 2 texels per world pixel, like the island. */
-export const HI_DENSITY_URLS = BOARD_URLS.filter((url) => /settlement-|city-|robber-|token|port-/.test(url));

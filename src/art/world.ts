@@ -25,7 +25,7 @@ import {
   tree,
   TREE_KINDS,
 } from "./props.ts";
-import { Raster, bayer, fbm, hash2, mix, noise, ramp, type RGB } from "./raster.ts";
+import { Raster, bayer, downsample, fbm, grade, hash2, mix, noise, tone, type RGB } from "./raster.ts";
 
 const HEX = 56;
 const SQ3 = Math.sqrt(3);
@@ -107,20 +107,20 @@ function meadow(wx: number, wy: number, tx: number, ty: number, seed: number, lu
   let t = 0.2 + base * 0.5 + (blades - 0.5) * 0.62 + lush;
   if (blades > 0.78) t += 0.12;
   const litterMask = fbm(wx / 18, wy / 18, seed + 2, 2);
-  if (litterMask > 0.6 && hash2(tx, ty, seed) < (litterMask - 0.6) * 2.2) return ramp(P.litter, hash2(ty, tx, seed), tx, ty);
+  if (litterMask > 0.6 && hash2(tx, ty, seed) < (litterMask - 0.6) * 2.2) return tone(P.litter, hash2(ty, tx, seed), tx, ty);
   const h = hash2(tx, ty, seed + 5);
   if (h < 0.0035) return P.flowers[Math.floor(hash2(tx, ty, 9) * P.flowers.length)]!;
-  return ramp(P.grass, t, tx, ty);
+  return tone(P.grass, t, tx, ty);
 }
 
 function forestFloor(wx: number, wy: number, tx: number, ty: number, seed: number): RGB {
   const m = fbm(wx / 14, wy / 14, seed + 2, 2);
-  if (hash2(tx, ty, seed) < 0.18 + m * 0.35) return ramp(P.litter, hash2(ty, tx, seed) * 0.9, tx, ty);
+  if (hash2(tx, ty, seed) < 0.18 + m * 0.35) return tone(P.litter, hash2(ty, tx, seed) * 0.9, tx, ty);
   const t = fbm(wx / 12, wy / 12, seed, 2) * 0.8 + (noise(tx / 1.5, ty / 1.2, seed + 1) - 0.5) * 0.5;
-  return ramp(P.forestFloor, t + 0.15, tx, ty);
+  return tone(P.forestFloor, t + 0.15, tx, ty);
 }
 
-function field(cell: Cell, wx: number, wy: number, tx: number, ty: number, d: number, s: number): RGB {
+function field(cell: Cell, wx: number, wy: number, tx: number, ty: number, d: number, _s: number): RGB {
   // grassy headland round every field
   if (d < 5 + (noise(wx / 6, wy / 6, cell.seed) - 0.5) * 4) return meadow(wx, wy, tx, ty, cell.seed, 0.08);
   const ca = Math.cos(cell.rowAngle);
@@ -131,13 +131,18 @@ function field(cell: Cell, wx: number, wy: number, tx: number, ty: number, d: nu
   const strip = Math.floor((v + 200 + (noise(u / 20, 0, cell.seed) - 0.5) * 6) / 22);
   const roll = hash2(strip, 7, cell.seed);
   const kind = roll < 0.12 ? 3 : Math.floor(roll * 3);
-  const row = (((u * s) % (4 * s)) + 4 * s) % (4 * s);
-  if (row < s) return ramp(P.soil, 0.25 + noise(tx / 2, ty / 2, 4) * 0.35, tx, ty);
-  const stalk = noise(tx / 0.9, ty / 3, cell.seed + strip) - 0.5;
-  const lit = row < 2 * s ? 0.14 : row > 3 * s ? -0.12 : 0;
-  if (kind === 3) return ramp(P.stubble, 0.5 + stalk * 0.6 + lit, tx, ty);
-  const base = 0.42 + fbm(wx / 14, wy / 14, cell.seed + 2, 2) * 0.3 + (kind === 1 ? 0.12 : kind === 2 ? -0.08 : 0);
-  return ramp(P.wheat, base + stalk * 0.5 + lit, tx, ty);
+  // rows wander a little, like ones sown by hand
+  const uu = u + (noise(v / 11, u / 40, cell.seed + 5) - 0.5) * 3.2;
+  const across = (((uu % 4.4) + 4.4) % 4.4) / 4.4;
+  if (across < 0.2) return tone(P.soil, 0.18 + noise(tx / 2, ty / 2, 4) * 0.35, tx, ty);
+  // each row bulges toward the light, heads catch it, wind combs the field
+  const bulge = Math.sin(((across - 0.2) / 0.8) * Math.PI);
+  const heads = noise(tx / 1.3, ty / 1.3, cell.seed + strip) - 0.5;
+  const wind = fbm(wx / 28 + wy / 70, wy / 28, cell.seed + 9, 2) - 0.5;
+  const lit = across < 0.45 ? 0.1 : across > 0.85 ? -0.14 : 0;
+  if (kind === 3) return tone(P.stubble, 0.45 + heads * 0.6 + lit + bulge * 0.1, tx, ty);
+  const base = 0.4 + fbm(wx / 14, wy / 14, cell.seed + 2, 2) * 0.3 + (kind === 1 ? 0.12 : kind === 2 ? -0.08 : 0);
+  return tone(P.wheat, base + bulge * 0.18 + heads * 0.55 + wind * 0.35 + lit, tx, ty);
 }
 
 function clayGround(cell: Cell, wx: number, wy: number, tx: number, ty: number, s: number): RGB {
@@ -148,21 +153,21 @@ function clayGround(cell: Cell, wx: number, wy: number, tx: number, ty: number, 
     if (dd >= 1) continue;
     const steps = 3.4;
     const level = Math.floor((1 - dd) * steps);
-    if (level >= 3) return ramp(P.water.slice(1, 5), 0.3 + bayer(tx, ty) * 0.3 - dy * 0.35, tx, ty);
+    if (level >= 3) return tone(P.water.slice(1, 5), 0.3 + bayer(tx, ty) * 0.3 - dy * 0.35, tx, ty);
     const frac = (1 - dd) * steps - level;
     const wall = frac < 0.4;
     const facing = dx * 0.55 + dy * 0.85;
     let t = 0.45 - level * 0.12 + (wall ? (facing > 0 ? 0.3 : -0.2) : 0);
     t += emboss(tx, ty, 1.6 * s, 3) * 0.6;
-    return ramp(P.clay, t, tx, ty);
+    return tone(P.clay, t, tx, ty);
   }
   const base = fbm(wx / 16, wy / 16, cell.seed, 3);
   let t = 0.38 + base * 0.4 + emboss(tx, ty, 2.2 * s, cell.seed + 1) * 0.9;
   if (hash2(tx, ty, cell.seed) < 0.04) t += 0.25;
   // tufts of grass hang on in the clay
   const tuft = noise(wx / 7, wy / 7, cell.seed + 3);
-  if (tuft > 0.72 && noise(tx / 1.4, ty / 1.1, 5) > 0.5) return ramp(P.grass, 0.35 + (tuft - 0.72) * 2, tx, ty);
-  return ramp(P.clay, t, tx, ty);
+  if (tuft > 0.72 && noise(tx / 1.4, ty / 1.1, 5) > 0.5) return tone(P.grass, 0.35 + (tuft - 0.72) * 2, tx, ty);
+  return tone(P.clay, t, tx, ty);
 }
 
 function rockGround(cell: Cell, wx: number, wy: number, tx: number, ty: number, s: number): RGB {
@@ -170,9 +175,9 @@ function rockGround(cell: Cell, wx: number, wy: number, tx: number, ty: number, 
   const crack = 1 - Math.abs(2 * noise(wx / 9, wy / 9, cell.seed + 2) - 1);
   let t = 0.35 + fbm(wx / 10, wy / 10, cell.seed, 2) * 0.3 + emboss(tx, ty, 1.8 * s, cell.seed + 3) * 0.9;
   if (crack > 0.93) t -= 0.3;
-  if (moss > 0.58) return ramp(P.grass, 0.15 + (moss - 0.58) * 1.2 + (noise(tx / 1.5, ty / 1.2, 3) - 0.5) * 0.5, tx, ty);
+  if (moss > 0.58) return tone(P.grass, 0.15 + (moss - 0.58) * 1.2 + (noise(tx / 1.5, ty / 1.2, 3) - 0.5) * 0.5, tx, ty);
   if (hash2(tx, ty, cell.seed) < 0.025) return P.stone[5]!;
-  return ramp(P.stone.slice(1), t, tx, ty);
+  return tone(P.stone.slice(1), t, tx, ty);
 }
 
 function sandGround(wx: number, wy: number, tx: number, ty: number, seed: number, s: number): RGB {
@@ -181,7 +186,7 @@ function sandGround(wx: number, wy: number, tx: number, ty: number, seed: number
   let t = 0.45 + fbm(wx / 14, wy / 14, seed + 4, 2) * 0.3 + (ripple > 0.8 ? 0.2 : ripple < -0.65 ? -0.16 : 0);
   t += emboss(tx, ty, 1.5 * s, seed + 6) * 0.35;
   if (hash2(tx, ty, seed) < 0.01) t -= 0.35;
-  return ramp(P.sand, t, tx, ty);
+  return tone(P.sand, t, tx, ty);
 }
 
 function ground(cell: Cell, wx: number, wy: number, tx: number, ty: number, d: number, s: number): RGB {
@@ -283,7 +288,7 @@ export function paintIsland(board: Board, s = 2): IslandArt {
       // beach and wet sand along the water
       const sandW = 3 + noise(wx / 10, wy / 10, seed + 4) * 4;
       if (shore < sandW) {
-        c = shore < 1.6 ? ramp(P.wetSand, 0.4 + noise(tx / 2, ty / 2, 6) * 0.5, tx, ty) : sandGround(wx, wy, tx, ty, seed, s);
+        c = shore < 1.6 ? tone(P.wetSand, 0.4 + noise(tx / 2, ty / 2, 6) * 0.5, tx, ty) : sandGround(wx, wy, tx, ty, seed, s);
       } else if (shore < sandW + 2.5 && bayer(tx, ty) > (shore - sandW) / 2.5) {
         c = sandGround(wx, wy, tx, ty, seed, s);
       }
@@ -306,7 +311,11 @@ export function paintIsland(board: Board, s = 2): IslandArt {
   props.sort((a, b) => a.y - b.y);
   for (const p of props) p.draw();
 
-  return { raster: r, x: minX, y: minY, scale: s };
+  // Painted at s texels per world pixel, kept at one: the same pixel grid as
+  // the robber, with each pixel the average of finer paint.
+  const out = s > 1 ? downsample(r, s) : r;
+  grade(out, seed);
+  return { raster: out, x: minX, y: minY, scale: 1 };
 }
 
 /** Earth strata under the south shore, surf, and the island's shadow. */
@@ -333,9 +342,9 @@ function paintCliff(r: Raster, land: Uint8Array, W: number, H: number, s: number
       } else if (run <= D) {
         const k = (run + wobble) / s;
         let c: RGB;
-        if (k < 6) c = ramp(P.soil.slice(0, 4), 0.55 - k / 14 + (noise(tx / 2, ty / 2, 3) - 0.5) * 0.4, tx, ty);
-        else if (k < 11) c = ramp(P.clay.slice(1, 5), 0.5 + (noise(tx / (2 * s), ty / s, 4) - 0.5) * 0.6, tx, ty);
-        else c = ramp(P.stone.slice(0, 4), 0.5 + (noise(tx / (2 * s), ty / (1.5 * s), 5) - 0.5) * 0.8 - (k - 11) / 14, tx, ty);
+        if (k < 6) c = tone(P.soil.slice(0, 4), 0.55 - k / 14 + (noise(tx / 2, ty / 2, 3) - 0.5) * 0.4, tx, ty);
+        else if (k < 11) c = tone(P.clay.slice(1, 5), 0.5 + (noise(tx / (2 * s), ty / s, 4) - 0.5) * 0.6, tx, ty);
+        else c = tone(P.stone.slice(0, 4), 0.5 + (noise(tx / (2 * s), ty / (1.5 * s), 5) - 0.5) * 0.8 - (k - 11) / 14, tx, ty);
         // pebbles, roots, seams
         const h = hash2(tx >> 1, ty >> 1, seed);
         if (h < 0.05) c = mix(c, [255, 236, 200], 0.25);
