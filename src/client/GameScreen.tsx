@@ -3,7 +3,7 @@ import { startAmbience, stopAmbience } from "./audio.ts";
 import { BoardView } from "./BoardView.tsx";
 import type { BuildMode } from "./copy.ts";
 import { GameOver } from "./GameOver.tsx";
-import { BuildPanel, Hud, OfferPanel, ResourceStrip } from "./Hud.tsx";
+import { BuildPanel, Hud, OfferPanel, offerShownTo, ResourceStrip } from "./Hud.tsx";
 import { projectStateFor } from "../core/view.ts";
 import { whoseTurn } from "../ai/bot.ts";
 import { emptyResources } from "../core/resources.ts";
@@ -161,7 +161,7 @@ export function TableLayout({
           </SheetContent>
         </Sheet>
       </div>
-      {view.tradeOffers.length > 0 && !sheet ? (
+      {offerShownTo(view.tradeOffers[0], you?.id) && !sheet ? (
         <div className="shrink-0 border-t-2 border-[#8a6410] bg-[#2a1c16] p-2 md:hidden">
           <OfferPanel view={view} youId={you?.id ?? null} onAction={dispatch} />
         </div>

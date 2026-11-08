@@ -540,6 +540,15 @@ function TurnButtons({
   );
 }
 
+/**
+ * An offer is shown to whoever made it and to whoever may still take it.
+ * Someone refused (by hand, or because they lack the cards) only sees it in the log.
+ */
+export function offerShownTo(offer: PublicView["tradeOffers"][number] | undefined, youId: string | null | undefined): boolean {
+  if (!offer || !youId) return false;
+  return offer.from === youId || offer.responses[youId] !== "rejected";
+}
+
 export function OfferPanel({
   view,
   youId,
@@ -550,7 +559,7 @@ export function OfferPanel({
   onAction: (a: Action) => boolean | void;
 }) {
   const offer = useLingeringOffer(view.tradeOffers[0] ?? null);
-  if (!offer || !youId) return null;
+  if (!offer || !youId || !offerShownTo(offer, youId)) return null;
   const owner = view.players.find((p) => p.id === offer.from);
   const mine = offer.from === youId;
   const myAnswer = offer.responses[youId];
@@ -619,7 +628,7 @@ export function OfferPanel({
         </div>
       ) : (
         <p className="mt-1 text-[#6a5a40]">
-          {myAnswer === "accepted" ? `Você topou. ${owner?.name} decide se fecha.` : "Você recusou."}
+          {myAnswer === "accepted" ? `Você topou. ${owner?.name} decide se fecha.` : "Oferta encerrada."}
         </p>
       )}
     </div>

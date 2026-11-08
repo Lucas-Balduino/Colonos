@@ -74,4 +74,22 @@ describe("troca entre jogadores", () => {
     expect(you?.resources.wood).toBe(1);
     expect(you?.resources.wheat).toBe(1);
   });
+  it("quem não tem o que a oferta pede nem é consultado", () => {
+    const state = buildScenario("troca");
+    const poor = state.players.find((player) => player.id === "p3");
+    if (!poor) throw new Error("Lenhadora ausente");
+    poor.resources.wheat = 0;
+    const opened = must(state, offer);
+    expect(opened.tradeOffers[0]!.responses.p3).toBe("rejected");
+    expect(opened.tradeOffers[0]!.responses.p2).toBe("pending");
+    expect(opened.log.some((line) => line.text === "Você ofereceu 2 madeira por 1 trigo.")).toBe(true);
+  });
+
+  it("se ninguém tem o pedido, a oferta nem abre e fica no registro", () => {
+    const state = buildScenario("troca");
+    for (const player of state.players) if (player.id !== "p1") player.resources.wheat = 0;
+    const opened = must(state, offer);
+    expect(opened.tradeOffers).toHaveLength(0);
+    expect(opened.log.some((line) => line.text === "Ninguém tinha o que foi pedido.")).toBe(true);
+  });
 });

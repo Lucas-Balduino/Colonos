@@ -75,10 +75,14 @@ function listaRecursos(map: ResourceMap): string {
   return `${parts.slice(0, -1).join(", ")} e ${parts[parts.length - 1]}`;
 }
 
-function freshResponses(state: GameState, from: PlayerId): Record<PlayerId, TradeResponse> {
+/**
+ * Who still has to answer an offer. Someone who cannot pay what it asks could
+ * only refuse, so they start out refused and are never asked.
+ */
+function freshResponses(state: GameState, from: PlayerId, want: ResourceMap): Record<PlayerId, TradeResponse> {
   const responses: Record<PlayerId, TradeResponse> = {};
   for (const player of state.players) {
-    if (player.id !== from) responses[player.id] = "pending";
+    if (player.id !== from) responses[player.id] = hasAtLeast(player.resources, want) ? "pending" : "rejected";
   }
   return responses;
 }
@@ -439,14 +443,14 @@ function apply(state: GameState, action: Action): void {
       if (!hasAtLeast(p.resources, action.give)) throw new RuleError("cannot-afford", "Você não tem o que oferece.");
       const id = `t${state.offerSeq++}`;
       state.offersThisTurn = (state.offersThisTurn ?? 0) + 1;
-      state.tradeOffers.push({
-        id,
-        from: p.id,
-        give: cloneResources(action.give),
-        want: cloneResources(action.want),
-        responses: freshResponses(state, p.id),
-      });
-      log(state, `${p.name} ofereceu uma troca.`, p.id);
+      const responses = freshResponses(state, p.id, action.want);
+      log(state, `${p.name} ofereceu ${listaRecursos(action.give)} por ${listaRecursos(action.want)}.`, p.id);
+      // nobody holds what it asks for: the offer closes before anyone is bothered
+      if (Object.values(responses).every((r) => r === "rejected")) {
+        log(state, "Ninguém tinha o que foi pedido.", p.id);
+        return;
+      }
+      state.tradeOffers.push({ id, from: p.id, give: cloneResources(action.give), want: cloneResources(action.want), responses });
       return;
     }
     case "ACCEPT_TRADE": {
